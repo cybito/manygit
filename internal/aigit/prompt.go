@@ -39,6 +39,10 @@ Rules:
   clearly means all of them.
 - Use each repo's own main-ref: "master" for repos whose main-ref is master, "main"
   for the rest. They differ across this tree.
+- The "upstream" column is the actual tracking ref, such as "origin/main"; use
+  its remote name and branch when a command needs them. "has-remote" is only a
+  yes/no capability marker, never a literal remote name. Never write "remote"
+  as a Git remote argument unless the upstream column explicitly names it.
 - A repo with uncommitted changes cannot rebase or pull cleanly, and a repo with no
   remote cannot be pushed or fetched. Plan around that, or explain in "note".
 - Steps run in order and STOP at the first failure. Order them so that matters.

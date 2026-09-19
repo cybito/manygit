@@ -31,15 +31,16 @@ func (m Model) aiContext() aigit.Context {
 	c := aigit.Context{Root: m.root}
 	for _, r := range m.repos {
 		c.Repos = append(c.Repos, aigit.Repo{
-			Name:    r.repo.Name,
-			Group:   r.repo.Group,
-			Branch:  r.status.Branch,
-			MainRef: r.status.Default,
-			Ahead:   r.status.Ahead,
-			Behind:  r.status.Behind,
-			Dirty:   r.status.DirtyCount,
-			Remote:  r.status.Slug != "" || r.status.Ahead > 0 || r.status.Behind > 0,
-			Tag:     r.latestTag,
+			Name:     r.repo.Name,
+			Group:    r.repo.Group,
+			Branch:   r.status.Branch,
+			MainRef:  r.status.Default,
+			Upstream: r.status.Upstream,
+			Ahead:    r.status.Ahead,
+			Behind:   r.status.Behind,
+			Dirty:    r.status.DirtyCount,
+			Remote:   r.status.Slug != "" || r.status.Ahead > 0 || r.status.Behind > 0,
+			Tag:      r.latestTag,
 		})
 	}
 	for _, sc := range m.scripts {

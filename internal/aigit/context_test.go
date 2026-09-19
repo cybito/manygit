@@ -10,8 +10,8 @@ func ctx() Context {
 		Root:   "/tree",
 		Cursor: "blendxapi",
 		Repos: []Repo{
-			{Name: "blendxapi", Group: "edx-dev", Branch: "feat/x", MainRef: "master", Ahead: 2, Dirty: 3, Remote: true, Tag: "v1.1.1"},
-			{Name: "blendxai", Group: "edx-dev", Branch: "main", MainRef: "main", Remote: true},
+			{Name: "blendxapi", Group: "edx-dev", Branch: "feat/x", MainRef: "master", Upstream: "origin/feat/x", Ahead: 2, Dirty: 3, Remote: true, Tag: "v1.1.1"},
+			{Name: "blendxai", Group: "edx-dev", Branch: "main", MainRef: "main", Upstream: "origin/main", Remote: true},
 			{Name: "blendxddn", Group: "other", Branch: "main", MainRef: "main"},
 		},
 		CursorBranch:   "feat/x",
@@ -24,16 +24,20 @@ func TestRender_CarriesTheDecidingFacts(t *testing.T) {
 	got := ctx().Render()
 	for _, want := range []string{
 		"blendxapi", "edx-dev", "feat/x",
-		"master",    // per-repo main ref: rebasing blendxapi onto "main" would fail
-		"3 dirty",   // cannot rebase a dirty tree
-		"no-remote", // blendxddn cannot be pushed
-		"v1.1.1",    // "cut the next tag" needs to know where it is
+		"master",        // per-repo main ref: rebasing blendxapi onto "main" would fail
+		"origin/feat/x", // actual tracking ref for commands needing a remote name
+		"3 dirty",       // cannot rebase a dirty tree
+		"has-remote",    // the context must identify capability, not invent a remote name
+		"v1.1.1",        // "cut the next tag" needs to know where it is
 		"cursor repo: blendxapi",
 		"groups: edx-dev, other",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("context is missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "| remote |") {
+		t.Fatalf("context must not present capability marker as a remote name:\n%s", got)
 	}
 }
 
@@ -106,8 +110,10 @@ func TestPrompt_StatesTheContract(t *testing.T) {
 		"blendxapi",                  // the context
 		"Only git",                   // the decline instruction
 		"never delete remote refs",   // the safety rules, restated
+		"upstream",                   // actual tracking ref is available
+		"literal remote name",        // prevents capability marker from becoming a Git argument
 		"STOP at the first failure",  // ordering matters to the model
-		"NEVER ask a question",       // there is no thread to answer one in
+		"NEVER ask a question",       // there is no conversation here
 		"no second turn",             // ...and the model is told why
 	} {
 		if !strings.Contains(p, want) {

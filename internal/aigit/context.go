@@ -11,15 +11,16 @@ import (
 // data on purpose: the caller copies it off the UI's own structs, so nothing here
 // can be mutated by an in-flight fetch while a command goroutine reads it.
 type Repo struct {
-	Name    string // "blendxapi"
-	Group   string // parent folder, e.g. "edx-dev" — how "everything in other/" resolves
-	Branch  string // current branch
-	MainRef string // "main" or "master" — "rebase onto master" is wrong in a main repo
-	Ahead   int
-	Behind  int
-	Dirty   int  // changed files; you cannot rebase a dirty tree
-	Remote  bool // has an upstream; a local-only repo cannot be pushed
-	Tag     string
+	Name     string // "blendxapi"
+	Group    string // parent folder, e.g. "edx-dev" — how "everything in other/" resolves
+	Branch   string // current branch
+	MainRef  string // "main" or "master" — "rebase onto master" is wrong in a main repo
+	Upstream string // actual tracking ref, e.g. "origin/main"; empty when none
+	Ahead    int
+	Behind   int
+	Dirty    int  // changed files; you cannot rebase or pull cleanly
+	Remote   bool // at least one remote is configured; not a remote name
+	Tag      string
 }
 
 // Context is everything the harness gets about the tree.
@@ -63,18 +64,18 @@ func (c Context) Render() string {
 	if len(c.CursorBranches) > 0 {
 		fmt.Fprintf(&b, "branches of %s: %s\n", c.Cursor, strings.Join(c.CursorBranches, ", "))
 	}
-	b.WriteString("\nrepos (name | group | branch | main-ref | ahead/behind | dirty | remote | latest-tag):\n")
+	b.WriteString("\nrepos (name | group | branch | upstream | main-ref | ahead/behind | dirty | has-remote | latest-tag):\n")
 	for _, r := range c.Repos {
-		remote := "no-remote"
+		remote := "no"
 		if r.Remote {
-			remote = "remote"
+			remote = "yes"
 		}
 		tag := r.Tag
 		if tag == "" {
 			tag = "-"
 		}
-		fmt.Fprintf(&b, "%s | %s | %s | %s | +%d/-%d | %d dirty | %s | %s\n",
-			r.Name, orDash(r.Group), orDash(r.Branch), orDash(r.MainRef),
+		fmt.Fprintf(&b, "%s | %s | %s | %s | %s | +%d/-%d | %d dirty | %s | %s\n",
+			r.Name, orDash(r.Group), orDash(r.Branch), orDash(r.Upstream), orDash(r.MainRef),
 			r.Ahead, r.Behind, r.Dirty, remote, tag)
 	}
 	return b.String()
