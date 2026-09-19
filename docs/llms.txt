@@ -101,7 +101,7 @@ Actions apply to the repo under the `>` cursor.
 - `j` / `k` — move within the focused pane
 - `←` / `→` — hop between Repos and that repo's Branches
 - `enter` — open a repo's branches, check one out, run a script, or check out a PR
-- `s` / `p` — sync (fetch then fast-forward pull) / push
+- `s` / `p` — sync (pull + merge + push) / push
 - `d` / `D` — discard changes after a confirm (`D` also deletes untracked files)
 - `f` / `r` — fetch this repo / refetch all
 - `/` — filter the focused list; Repos match on name AND current branch (and the
@@ -110,9 +110,10 @@ Actions apply to the repo under the `>` cursor.
 - `t` — show each repo's latest tag inline
 - `g` / `n` — full-screen commit graph / full-screen news feed
 - `m` — in the PRs pane, toggle your PRs and review requests
-- `:` — plain-English git: the request goes to your AI harness (claude or codex) with the
-  repo tree as context; it replies with git commands, manygit shows them and runs them only
-  after you confirm. Only git — never a shell, never a force-push or a remote delete.
+- `:` — plain-English git: the request goes to your AI harness (`omp`, `claude`, or
+  `codex`) with the repo tree as context; it replies with git commands, manygit shows
+  them and runs them only after you confirm. Only git — never a shell, never a
+  force-push or a remote delete.
   Reference a file with `@path` (tab-completes on the scripts it found) to send its
   contents along: `@scripts/update-all.sh only the frontend apps from this`. Referenced
   files must live inside the scanned tree.
@@ -173,8 +174,8 @@ Actions apply to the repo under the `>` cursor.
   touches as it touches them, then re-reads all of them once when the run ends.
   The Output pane has one owner at a time: starting a script supersedes a pending
   `:` reply and vice versa, so neither can write into the other's output.
-- AI news feed: with `claude` or `codex` on PATH, the top bar summarizes recent
-  commits across every repo in English. Cached four hours.
+- AI news feed: with `omp`, `claude`, or `codex` on PATH, the selected harness summarizes
+  recent commits across every repo in English. Cached four hours.
 - Themes: `default`, `serika_dark`, `dracula`, `nord`, `catppuccin`, `8008`,
   adapted from monkeytype. Configurable in `~/.config/manygit/config.yml` or the
   settings face of the `?` overlay.
@@ -182,9 +183,9 @@ Actions apply to the repo under the `>` cursor.
 ## Safety
 
 manygit never writes to the folder you launch it from. On its own it never
-force-pushes, merges, or rebases: `s` is fetch + fast-forward-only pull, and `p`
-is a plain push. The only destructive action it offers on its own is discarding a
-repo's changes (`d` / `D`), which always asks first.
+force-pushes or rebases: `s` is pull + merge + push and may create a regular merge
+commit, but never rebases or force-pushes; `p` is a plain push. The only destructive
+action it offers on its own is discarding a repo's changes, which always asks first.
 
 `!` is the deliberate exception: it runs the bash command you type in the
 highlighted repo (falling back to `cmd.exe` on Windows if bash isn't on PATH),

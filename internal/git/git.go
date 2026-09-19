@@ -271,10 +271,13 @@ func Fetch(dir string) error {
 	return err
 }
 
-// PullFFOnly fast-forwards the current branch to its upstream. It never merges
-// or rebases; a non-fast-forward returns an error and changes nothing.
-func PullFFOnly(dir string) error {
-	_, err := run(dir, "pull", "--ff-only", "--quiet")
+// Sync pulls the current branch with a regular merge when needed, then pushes
+// the result. A failed pull or merge returns immediately and never pushes.
+func Sync(dir string) error {
+	if _, err := run(dir, "pull", "--no-rebase", "--no-edit", "--quiet"); err != nil {
+		return err
+	}
+	_, err := run(dir, "push", "--quiet")
 	return err
 }
 

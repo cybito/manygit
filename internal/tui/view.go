@@ -1291,7 +1291,7 @@ func (m Model) keysColumns() (leftCol, rightCol []string) {
 	}
 	right := []string{
 		styleGroup.Render("Actions") + styleDim.Render(" on the > repo"),
-		kr("s", "sync (fetch + pull --ff-only)"),
+		kr("s", "sync (pull + merge + push)"),
 		kr("p", "push"),
 		kr("f/r", "fetch current / refetch all"),
 		kr("b/enter", "checkout selected branch"),

@@ -180,6 +180,8 @@ func initRepoWithRemote(t *testing.T) (clone, bare string) {
 
 	clone = t.TempDir()
 	gitCmd(t, clone, "init", "-q", "-b", "master")
+	gitCmd(t, clone, "config", "user.name", "test")
+	gitCmd(t, clone, "config", "user.email", "test@test")
 	gitCmd(t, clone, "remote", "add", "origin", bare)
 	if err := os.WriteFile(filepath.Join(clone, "a.txt"), []byte("1\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -192,14 +194,18 @@ func initRepoWithRemote(t *testing.T) (clone, bare string) {
 
 // advanceOrigin clones bare, adds a commit, and pushes it.
 func advanceOrigin(t *testing.T, bare string) {
+	advanceOriginFile(t, bare, "b.txt", "2\n", "c2")
+}
+
+func advanceOriginFile(t *testing.T, bare, name, content, message string) {
 	t.Helper()
 	other := t.TempDir()
 	gitCmd(t, other, "clone", "-q", bare, ".")
-	if err := os.WriteFile(filepath.Join(other, "b.txt"), []byte("2\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(other, name), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, other, "add", ".")
-	gitCmd(t, other, "commit", "-q", "-m", "c2")
+	gitCmd(t, other, "commit", "-q", "-m", message)
 	gitCmd(t, other, "push", "-q", "origin", "master")
 }
 
@@ -214,17 +220,80 @@ func TestFetch_DetectsBehind(t *testing.T) {
 	}
 }
 
-func TestPullFFOnly_AdvancesHead(t *testing.T) {
+func TestSync_BehindFastForwardsAndPushes(t *testing.T) {
 	clone, bare := initRepoWithRemote(t)
 	advanceOrigin(t, bare)
-	if err := Fetch(clone); err != nil {
+	if err := Sync(clone); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if st := Status(clone); st.Ahead != 0 || st.Behind != 0 {
+		t.Errorf("status after sync = ahead %d, behind %d; want 0/0", st.Ahead, st.Behind)
+	}
+	head, err := run(clone, "rev-parse", "HEAD")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := PullFFOnly(clone); err != nil {
-		t.Fatalf("PullFFOnly: %v", err)
+	remote, err := run(bare, "rev-parse", "refs/heads/master")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if st := Status(clone); st.Behind != 0 {
-		t.Errorf("Behind after pull = %d, want 0", st.Behind)
+	if head != remote {
+		t.Errorf("remote head = %s, local head = %s", remote, head)
+	}
+}
+
+func TestSync_DivergedMergesAndPushes(t *testing.T) {
+	clone, bare := initRepoWithRemote(t)
+	if err := os.WriteFile(filepath.Join(clone, "local.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, clone, "add", ".")
+	gitCmd(t, clone, "commit", "-q", "-m", "local")
+	advanceOrigin(t, bare)
+	if err := Sync(clone); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	parents, err := run(clone, "rev-list", "--parents", "-n", "1", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(strings.Fields(parents)); got != 3 {
+		t.Errorf("HEAD parent fields = %d, want 3 for a merge commit: %q", got, parents)
+	}
+	head, err := run(clone, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := run(bare, "rev-parse", "refs/heads/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head != remote {
+		t.Errorf("remote head = %s, local head = %s", remote, head)
+	}
+}
+
+func TestSync_ConflictDoesNotPush(t *testing.T) {
+	clone, bare := initRepoWithRemote(t)
+	if err := os.WriteFile(filepath.Join(clone, "a.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, clone, "add", "a.txt")
+	gitCmd(t, clone, "commit", "-q", "-m", "local conflict")
+	advanceOriginFile(t, bare, "a.txt", "remote\n", "remote conflict")
+	before, err := run(bare, "rev-parse", "refs/heads/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Sync(clone); err == nil {
+		t.Fatal("Sync should fail on a merge conflict")
+	}
+	after, err := run(bare, "rev-parse", "refs/heads/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Errorf("remote moved after conflict: before %s, after %s", before, after)
 	}
 }
 

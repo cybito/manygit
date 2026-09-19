@@ -22,7 +22,7 @@ type Config struct {
 	Prune        []string `yaml:"prune"`         // merged with defaults
 	StatusGlyphs string   `yaml:"status_glyphs"` // "unicode" (↑↓) or "ascii" (+-)
 	Theme        string   `yaml:"theme"`         // color theme name (see the tui theme list)
-	Harness      string   `yaml:"harness"`       // AI harness: "claude" or "codex" (see internal/harness)
+	Harness      string   `yaml:"harness"`       // AI harness: "omp", "claude", or "codex" (see internal/harness)
 	NewsDays     int      `yaml:"news_days"`     // top-bar news feed window in days (commits newer than this)
 }
 

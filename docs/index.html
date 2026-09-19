@@ -564,7 +564,7 @@
                 </tr>
                 <tr>
                   <td class="kt__k"><b>s</b> / <b>p</b></td>
-                  <td>Sync (fetch, then fast-forward pull) / push</td>
+                  <td>Sync (pull, merge, then push) / push</td>
                 </tr>
                 <tr>
                   <td class="kt__k"><b>d</b> / <b>D</b></td>
@@ -735,7 +735,8 @@
               Press <b>:</b> and say what you want. It comes back as git commands you approve.
             </p>
             <p>
-              The prompt is named after your AI tool — <code>claude:</code> or <code>codex:</code> —
+              The prompt is named after your AI tool — <code>omp:</code>, <code>claude:</code>, or
+              <code>codex:</code> —
               and it knows the tree it is looking at: every repo, its branch, whether it is dirty,
               whether <code>main</code> is actually called <code>master</code>, and what the latest
               tag is. So <i>rebase current onto master</i> rebases each repo onto its own main
@@ -777,8 +778,8 @@
               The top bar reads the last few days of commits back to you in English.
             </p>
             <p>
-              If you have <code>claude</code> or <code>codex</code> on your PATH, manygit hands them
-              the recent main-branch commits across every repo and rotates the summaries through the
+              If you have <code>omp</code>, <code>claude</code>, or <code>codex</code> on your PATH,
+              manygit hands the selected harness the recent main-branch commits across every repo and rotates the summaries through the
               top bar. Press <b>n</b> for all of them at once. Summaries are cached for four hours
               and rewritten in place, so opening manygit doesn't re-summarize and the cache never
               grows.
@@ -831,9 +832,10 @@
             </table>
             <p>
               manygit never writes to the folder you launch it from. On its own it never
-              force-pushes, merges, or rebases — <b>s</b> is fetch plus a fast-forward-only pull,
-              <b>p</b> is a plain push — and the one destructive action it offers on its own
-              is discarding a repo's changes with <b>d</b> / <b>D</b>, which always asks first.
+              force-pushes or rebases — <b>s</b> is pull + merge + push and may create a regular
+              merge commit, but never rebases or force-pushes; <b>p</b> is a plain push — and the
+              one destructive action it offers on its own is discarding a repo's changes with
+              <b>d</b> / <b>D</b>, which always asks first.
             </p>
             <p>
               <b>!</b> is the deliberate exception: it runs the bash command you type, in the

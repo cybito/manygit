@@ -122,7 +122,7 @@ Actions apply to the **highlighted** repo (the `>` cursor).
 | `m` | in the PRs tab: toggle *my PRs* ⇄ *review requests* |
 | `enter` | Repos → view branches · Branches → checkout · Scripts → run · PRs → checkout the PR's branch |
 | `b` | checkout the highlighted branch — what `enter` does in Branches, from any pane |
-| `s` / `p` | sync (fetch + ff-pull) / push the highlighted repo |
+| `s` / `p` | sync (pull + merge + push) / push the highlighted repo |
 | `d` / `D` | discard changes (confirm): `d` tracked only · `D` also deletes untracked files |
 | `f` / `r` | fetch one / refetch all |
 | `g` | full-screen commit graph |
@@ -153,7 +153,7 @@ when the run ends.
 If the [`gh` CLI](https://cli.github.com) is installed and signed in
 (`gh auth login`), manygit adds a **PRs** tab next to Branches in the top-right
 slot (press `4`; `3` switches back to Branches) and shows `github: <user>` next
-to the harness in the footer. The tab lists two sets, toggled with `m`:
+to the selected harness (`omp`, `claude`, or `codex`) in the footer. The tab lists two sets, toggled with `m`:
 
 - **mine** — your open pull requests
 - **review requests** — PRs waiting on *your* review
@@ -209,9 +209,10 @@ so `o` works from a plain terminal too **as long as an editor window is connecte
 to the machine** — otherwise there's nothing to open into.
 
 manygit never writes to the folder you launch from. On its own it never
-force-pushes, merges, or rebases — `s` is fetch + fast-forward-only pull and `p`
-is a plain push — and the only destructive thing it offers *on its own* is
-discarding a repo's changes (`d` / `D`), which always asks you to confirm first.
+force-pushes or rebases — `s` is pull + merge + push and may create a regular
+merge commit, but never rebases or force-pushes; `p` is a plain push — and the
+only destructive thing it offers *on its own* is discarding a repo's changes
+(`d` / `D`), which always asks you to confirm first.
 
 `!` is the deliberate exception: it runs whatever bash command you type in the
 highlighted repo (falling back to `cmd.exe` on Windows if bash isn't on PATH),

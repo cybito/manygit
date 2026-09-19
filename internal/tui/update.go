@@ -978,7 +978,7 @@ func (m Model) handleSingleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Plain-English git. Unlike `/` this is global, not scoped to a pane — the
 		// request names its own scope, defaulting to the repo under the cursor.
 		if !harness.Available(m.cfg.Harness) {
-			return m, m.setStatus("no AI harness — install claude or codex, or set one in ? settings")
+			return m, m.setStatus("no AI harness — install omp, claude, or codex, or set one in ? settings")
 		}
 		m.aiPrompting = true
 		m.aiPrompt = ""
@@ -1005,8 +1005,8 @@ func (m Model) handleSingleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				})
 				continue
 			}
-			// A local-only repo has nothing to pull from: `pull --ff-only` would
-			// fail with "no tracking information". Say why instead.
+			// A local-only repo has nothing to pull from: `pull` would fail with
+			// "no tracking information". Say why instead.
 			if !r.status.HasRemote {
 				path := r.repo.Path
 				cmds = append(cmds, func() tea.Msg {

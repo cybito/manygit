@@ -20,6 +20,7 @@ type Harness struct {
 // All is the set of harnesses manygit knows how to drive, in display order. Each
 // runs with the CLI's own default model/settings (no model override).
 var All = []Harness{
+	{Name: "omp", Bin: "omp", args: []string{"-p", "--no-tools", "--no-session", "--no-extensions", "--no-skills", "--no-rules"}},
 	{Name: "claude", Bin: "claude", args: []string{"-p"}},
 	{Name: "codex", Bin: "codex", args: []string{"exec"}},
 }

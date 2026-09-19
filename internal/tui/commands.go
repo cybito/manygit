@@ -43,7 +43,7 @@ func fetchCmd(sem chan struct{}, path string) tea.Cmd {
 }
 
 func syncCmd(sem chan struct{}, path string) tea.Cmd {
-	return gated(sem, func() tea.Msg { return syncDoneMsg{path: path, err: git.PullFFOnly(path)} })
+	return gated(sem, func() tea.Msg { return syncDoneMsg{path: path, err: git.Sync(path)} })
 }
 
 func pushCmd(sem chan struct{}, path string) tea.Cmd {

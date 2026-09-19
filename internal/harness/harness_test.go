@@ -8,6 +8,10 @@ import (
 // The one-shot argv is just the base flags plus the prompt as the final
 // positional arg — no model override, so the CLI uses its own default.
 func TestOneShotArgs(t *testing.T) {
+	omp, _ := ByName("omp")
+	if got, want := omp.oneShotArgs("merge main"), []string{"-p", "--no-tools", "--no-session", "--no-extensions", "--no-skills", "--no-rules", "merge main"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("omp oneShotArgs = %v, want %v", got, want)
+	}
 	claude, _ := ByName("claude")
 	if got, want := claude.oneShotArgs("merge main"), []string{"-p", "merge main"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("claude oneShotArgs = %v, want %v", got, want)
@@ -19,11 +23,20 @@ func TestOneShotArgs(t *testing.T) {
 }
 
 func TestByName(t *testing.T) {
+	if h, ok := ByName("omp"); !ok || h.Bin != "omp" {
+		t.Errorf("ByName(omp) = %+v, %v", h, ok)
+	}
 	if h, ok := ByName("claude"); !ok || h.Bin != "claude" {
 		t.Errorf("ByName(claude) = %+v, %v", h, ok)
 	}
 	if _, ok := ByName("nope"); ok {
 		t.Error("ByName(nope) should be !ok")
+	}
+}
+
+func TestAllPrefersOMP(t *testing.T) {
+	if len(All) == 0 || All[0].Name != "omp" {
+		t.Fatalf("All starts with %v, want omp", All)
 	}
 }
 

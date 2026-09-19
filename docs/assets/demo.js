@@ -14,6 +14,7 @@
   var THEMES = ["default", "serika_dark", "dracula", "nord", "catppuccin", "8008"];
   // harness.All, from internal/harness/harness.go
   var HARNESSES = [
+    { name: "omp", installed: true },
     { name: "claude", installed: true },
     { name: "codex", installed: false }
   ];
@@ -414,7 +415,7 @@
 
     // config (the ? screen writes these; theme + glyphs persist)
     theme: "serika_dark",
-    harness: "claude",
+    harness: "omp",
     newsDays: 3,
     maxDepth: 3,
     glyphs: "unicode",
@@ -1206,7 +1207,7 @@
     // Same rows, same order, same strings — only which column they land in.
     var right = [
       "<div>" + gp("Actions") + d(" on the > repo") + "</div>",
-      kr("s", "sync (fetch + pull --ff-only)"),
+      kr("s", "sync (pull + merge + push)"),
       kr("p", "push"),
       kr("f/r", "fetch current / refetch all"),
       kr("b/enter", "checkout selected branch"),
@@ -1859,7 +1860,7 @@
     if (ref) {
       var picked = group ? targets : REPOS.filter(function (r) { return r.g === "apps"; });
       return {
-        steps: picked.map(function (r) { return { repo: r.n, args: ["pull", "--ff-only"] }; }),
+        steps: picked.map(function (r) { return { repo: r.n, args: ["pull", "--no-rebase", "--no-edit"] }; }),
         note: "from " + ref + " — only the git steps; its npm parts were left out."
       };
     }
@@ -1881,8 +1882,8 @@
     if (/sync|pull|fetch|update/.test(q)) {
       var steps = [];
       targets.forEach(function (r) {
-        steps.push({ repo: r.n, args: ["fetch", "--quiet"] });
-        steps.push({ repo: r.n, args: ["pull", "--ff-only"] });
+        steps.push({ repo: r.n, args: ["pull", "--no-rebase", "--no-edit"] });
+        steps.push({ repo: r.n, args: ["push", "--quiet"] });
       });
       return { steps: steps, note: "" };
     }
@@ -2404,7 +2405,7 @@
         if (!rs.loaded) setStatus(og("sync " + rs.n + " skipped: status not loaded yet"));
         else if (!rs.remote) setStatus(og("sync " + rs.n + " skipped: no remote"));
         else if (rs.dirty > 0) setStatus(og("sync " + rs.n + " skipped: dirty working tree"));
-        else { rs.behind = 0; setStatus(gr("synced " + rs.n)); reclampCursor(rs.path); }
+        else { rs.ahead = 0; rs.behind = 0; setStatus(gr("synced " + rs.n)); reclampCursor(rs.path); }
         break;
       }
       case "p": {
