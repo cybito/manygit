@@ -17,6 +17,38 @@ import (
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.IMEFailure() != nil {
+		return m, tea.Quit
+	}
+	switch msg.(type) {
+	case tea.FocusMsg:
+		m.imeFocused = true
+	case tea.BlurMsg:
+		m.imeFocused = false
+	}
+
+	model, cmd := m.update(msg)
+	next := model.(Model)
+	if next.imeReporter != nil {
+		var err error
+		if _, resumed := msg.(tea.ResumeMsg); resumed {
+			err = next.imeReporter.resume(next.imeState(), next.imeFocused)
+		} else if next.imeFocused {
+			err = next.imeReporter.report(next.imeState())
+		} else {
+			err = next.imeReporter.blur()
+		}
+		if err != nil {
+			// Do not dispatch the business Cmd after protection failed.
+			return next, tea.Quit
+		}
+	}
+	return next, cmd
+}
+
+// update retains the business key handling and early returns. Update synchronizes
+// the returned Model so cooldowns and asynchronous messages cannot skip IME state.
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height

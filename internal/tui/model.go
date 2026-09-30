@@ -88,6 +88,9 @@ type repoVM struct {
 // Model is the Bubble Tea model.
 type Model struct {
 	cfg config.Config
+
+	imeReporter *imeReporter
+	imeFocused  bool
 	// root is the directory the repos were discovered under. Kept so the scan
 	// can be re-run when the depth setting changes; main.go resolves it once.
 	root  string

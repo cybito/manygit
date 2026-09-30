@@ -229,6 +229,21 @@ that take a shell command (`-c`, `rebase --exec`, `submodule foreach`,
 `filter-branch`, `bisect run`) are refused before the confirm appears. A batch
 stops at the first failure, so a conflict leaves you one repo to fix, not five.
 
+## Local input methods (custom source build)
+
+In a local macOS or Linux GUI terminal, this custom build reports its actual TUI
+mode to the existing `ime-control` service. Command mode stays temporarily English;
+filtering (`/`), the shell prompt (`!`), the AI prompt (`:`), and editing the
+settings editor command use your latest input-source choice. The `!` prompt stays
+in text mode after Enter runs a command. Observable manual source changes update
+that choice; reselecting the already-active source cannot be detected reliably.
+
+Blur, suspension, and exit release the temporary choice; returning to a focused
+command mode protects it again. A failed mode or release ACK is an error, not a
+silent fallback. Help, version, stats, SSH, headless sessions, and Windows do not
+connect to the service. There is no extra input-method setting or keybinding.
+
+
 ## Releasing (maintainer)
 
 Cut a release by pushing a version tag — GitHub Actions builds the binaries and

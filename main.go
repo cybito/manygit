@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -103,14 +104,34 @@ Flags:
 	// *.sh scripts near the root (root-level + one dir deep, e.g. scripts/).
 	scripts := discover.Scripts(scanRoot, 2, cfg.PruneSet())
 
-	p := tea.NewProgram(tui.New(cfg, scanRoot, repos, scripts), tea.WithAltScreen(), tea.WithReportFocus())
-	if _, err := p.Run(); err != nil {
+	if err := runTUI(tui.New(cfg, scanRoot, repos, scripts), localGUITerminal()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		showNotice(updateNotice)
 		os.Exit(1)
 	}
 
 	showNotice(updateNotice)
+}
+
+// runTUI owns the complete interactive lifecycle. Initial protection must succeed
+// before NewProgram/Run can take over the terminal or start keyboard dispatch.
+func runTUI(model tui.Model, enableIME bool, options ...tea.ProgramOption) error {
+	if enableIME {
+		if err := model.EnableTUIIME(); err != nil {
+			return errors.Join(err, model.CloseIME())
+		}
+	}
+	programOptions := []tea.ProgramOption{
+		tea.WithAltScreen(), tea.WithReportFocus(), tea.WithFilter(tui.IMEFilter),
+	}
+	programOptions = append(programOptions, options...)
+	finalModel, runErr := tea.NewProgram(model, programOptions...).Run()
+	if final, ok := finalModel.(tui.Model); ok {
+		model = final
+	}
+	imeErr := model.IMEFailure()
+	closeErr := model.CloseIME()
+	return errors.Join(runErr, imeErr, closeErr)
 }
 
 // showNotice prints a held-back update notice and records that it was shown.
