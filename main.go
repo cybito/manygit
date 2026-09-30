@@ -103,9 +103,12 @@ Flags:
 	// *.sh scripts near the root (root-level + one dir deep, e.g. scripts/).
 	scripts := discover.Scripts(scanRoot, 2, cfg.PruneSet())
 
-	p := tea.NewProgram(tui.New(cfg, scanRoot, repos, scripts), tea.WithAltScreen(), tea.WithReportFocus())
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	model := tui.New(cfg, scanRoot, repos, scripts)
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithReportFocus())
+	_, runErr := p.Run()
+	model.Close()
+	if runErr != nil {
+		fmt.Fprintln(os.Stderr, runErr)
 		showNotice(updateNotice)
 		os.Exit(1)
 	}
