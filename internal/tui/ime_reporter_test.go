@@ -833,8 +833,16 @@ func TestIMEJobControlResumeWaitsForTrueInput(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.CloseIME() })
 	parentOwner := owner.Load()
-	if _, ok := IMEFilter(m, tea.SuspendMsg{}).(tea.SuspendMsg); !ok {
-		t.Fatal("valid suspension failed")
+	next, suspend := m.Update(tea.KeyMsg{Type: tea.KeyCtrlZ})
+	m = next.(Model)
+	if suspend == nil {
+		t.Fatal("Ctrl-Z did not request native suspension")
+	}
+	if _, ok := IMEFilter(m, suspend()).(tea.SuspendMsg); !ok {
+		t.Fatal("valid Ctrl-Z suspension failed")
+	}
+	if owner.Load() != 0 {
+		t.Fatal("Ctrl-Z terminal handoff retained the parent source owner")
 	}
 	other := newIMEReporter(path)
 	if err := other.episode("text"); err != nil {
@@ -842,7 +850,7 @@ func TestIMEJobControlResumeWaitsForTrueInput(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = other.close() })
 	otherOwner := owner.Load()
-	next, _ := m.Update(tea.ResumeMsg{})
+	next, _ = m.Update(tea.ResumeMsg{})
 	m = next.(Model)
 	if owner.Load() != otherOwner || m.imeReporter.authorized() {
 		t.Fatal("job-control callback reacquired without a genuine input/focus episode")

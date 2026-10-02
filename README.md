@@ -235,7 +235,7 @@ stops at the first failure, so a conflict leaves you one repo to fix, not five.
 
 `HERDR_IME_INTENT=1` 与 `HERDR_ENV=1` 先于 GUI/SSH 判定选择 `pane.input_intent.stream`，要求可信 `HERDR_SOCKET_PATH` 与互斥 pane/Popup identity；非法／矛盾 marker 明确失败，不回退至 server 输入源。server 的 `scope:recorded` 只证明意图保存，聚焦 Herdr client 独立等待本机 `scope:applied` ACK；server/client 两端 `[experimental].ime_control` 默认关闭。
 
-失焦、暂停、退出释放暂态。异步 child 完成只恢复运行资格，不自动夺回 owner；下一个真实 key/FocusIn 才按当前 classifier 恢复。模式／释放 ACK 失败是错误而非静默 fallback。help、version、stats 不接触服务；无 marker 的 SSH、headless 及 Windows 保留绕过。没有额外输入法设置或 keybinding，源码候选不等于已部署／真实 GUI 验收。
+失焦、暂停、退出释放暂态。`Ctrl-Z` 经既有 IME filter 确认释放后原生挂起；`fg`／异步 child 完成只恢复运行资格，不自动夺回 owner，下一个真实 key/FocusIn 才按当前 classifier 恢复。模式／释放 ACK 失败是错误而非静默 fallback。help、version、stats 不接触服务；无 marker 的 SSH、headless 及 Windows 保留绕过。没有额外输入法设置或 IME 专用 keybinding，源码候选不等于已部署／真实 GUI 验收。
 
 
 ## Releasing (maintainer)

@@ -20,6 +20,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.IMEFailure() != nil {
 		return m, tea.Quit
 	}
+	if key, ok := msg.(tea.KeyMsg); ok && key.Type == tea.KeyCtrlZ {
+		// Terminal handoff must release through IMEFilter even when a normal
+		// inactive ACK would deny command input.
+		return m, tea.Suspend
+	}
 	if m.imeReporter != nil {
 		var err error
 		switch msg.(type) {
