@@ -9,9 +9,12 @@ import (
 	"syscall"
 )
 
-// Match the public guard's local GUI gate; SSH and headless sessions never
-// contact the local input-source owner, even when they have a pseudo-terminal.
-func localGUITerminal() bool {
+// Herdr transport takes precedence over the ordinary local GUI gate, including
+// SSH panes. Marker validation belongs to the reporter and never falls back.
+func imeTerminal() bool {
+	if _, marked := os.LookupEnv("HERDR_IME_INTENT"); marked {
+		return true
+	}
 	for _, key := range []string{"SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"} {
 		if os.Getenv(key) != "" {
 			return false

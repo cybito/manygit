@@ -2,5 +2,10 @@
 
 package main
 
-// No local IME reporter is enabled on Windows or other unsupported platforms.
-func localGUITerminal() bool { return false }
+import "os"
+
+// Marked sessions must fail visibly rather than silently bypassing transport.
+func imeTerminal() bool {
+	_, marked := os.LookupEnv("HERDR_IME_INTENT")
+	return marked
+}

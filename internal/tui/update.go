@@ -20,24 +20,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.IMEFailure() != nil {
 		return m, tea.Quit
 	}
-	switch msg.(type) {
-	case tea.FocusMsg:
-		m.imeFocused = true
-	case tea.BlurMsg:
-		m.imeFocused = false
+	if m.imeReporter != nil {
+		var err error
+		switch msg.(type) {
+		case tea.KeyMsg:
+			err = m.imeReporter.key(m.imeState())
+			m.imeFocused = m.imeReporter.authorized()
+		case tea.FocusMsg:
+			err = m.imeReporter.episode(m.imeState())
+			m.imeFocused = m.imeReporter.authorized()
+		case tea.BlurMsg:
+			m.imeFocused = false
+			err = m.imeReporter.blur()
+		}
+		if err != nil {
+			return m, tea.Quit
+		}
+		if _, key := msg.(tea.KeyMsg); key && !m.imeFocused {
+			// A normal inactive ACK cancels command authorization without
+			// converting background focus refusal into a transport failure.
+			return m, nil
+		}
 	}
 
 	model, cmd := m.update(msg)
 	next := model.(Model)
 	if next.imeReporter != nil {
 		var err error
-		if _, resumed := msg.(tea.ResumeMsg); resumed {
-			err = next.imeReporter.resume(next.imeState(), next.imeFocused)
-		} else if next.imeFocused {
+		if next.imeFocused {
 			err = next.imeReporter.report(next.imeState())
-		} else {
-			err = next.imeReporter.blur()
 		}
+		next.imeFocused = next.imeReporter.authorized()
 		if err != nil {
 			// Do not dispatch the business Cmd after protection failed.
 			return next, tea.Quit
@@ -46,8 +59,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return next, cmd
 }
 
-// update retains the business key handling and early returns. Update synchronizes
-// the returned Model so cooldowns and asynchronous messages cannot skip IME state.
+// update retains the business key handling and early returns. Only real input
+// and focus episodes acquire; background updates may synchronize an active mode.
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -960,6 +973,11 @@ func (m Model) handleSingleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case missing != "":
 			return m, m.setStatus(styleOrange.Render(noLocalClone(missing, "open")))
 		case path != "":
+			if m.imeReporter != nil {
+				if err := m.imeReporter.suspend(); err != nil {
+					return m, tea.Quit
+				}
+			}
 			return m, openRepoCmd(m.cfg.OpenCmd, path)
 		}
 	case "F":

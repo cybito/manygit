@@ -104,7 +104,7 @@ Flags:
 	// *.sh scripts near the root (root-level + one dir deep, e.g. scripts/).
 	scripts := discover.Scripts(scanRoot, 2, cfg.PruneSet())
 
-	if err := runTUI(tui.New(cfg, scanRoot, repos, scripts), localGUITerminal()); err != nil {
+	if err := runTUI(tui.New(cfg, scanRoot, repos, scripts), imeTerminal()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		showNotice(updateNotice)
 		os.Exit(1)
@@ -113,10 +113,11 @@ Flags:
 	showNotice(updateNotice)
 }
 
-// runTUI owns the complete interactive lifecycle. Initial protection must succeed
-// before NewProgram/Run can take over the terminal or start keyboard dispatch.
+// runTUI owns the complete interactive lifecycle. Initial reporting must receive
+// an ACK before NewProgram/Run takes over the terminal or starts keyboard input.
 func runTUI(model tui.Model, enableIME bool, options ...tea.ProgramOption) error {
-	if enableIME {
+	_, marked := os.LookupEnv("HERDR_IME_INTENT")
+	if marked || enableIME {
 		if err := model.EnableTUIIME(); err != nil {
 			return errors.Join(err, model.CloseIME())
 		}
