@@ -77,7 +77,7 @@ func localIMESocket() (string, error) {
 }
 
 // exchange runs under mu. An inactive direct ACK is a normal foreground refusal;
-// protocol/transport failures close the stream and remain fatal, without replay.
+// protocol/transport failures permanently disable this reporter, without replay.
 func (r *imeReporter) exchange(request imeRequest) (scope string, err error) {
 	defer func() {
 		if err != nil {
@@ -232,6 +232,9 @@ func (r *imeReporter) drop() {
 
 func (r *imeReporter) fail(err error) error {
 	r.drop()
+	r.state = ""
+	r.suspended = false
+	r.suspendInactive = false
 	if r.failure == nil {
 		r.failure = fmt.Errorf("IME reporting failed: %w", err)
 	}
@@ -378,23 +381,15 @@ func (m *Model) EnableTUIIME() error {
 	if m.imeReporter == nil {
 		reporter, err := configuredIMEReporter()
 		if err != nil {
-			return err
+			m.imeReporter = &imeReporter{failure: err}
+			m.imeFocused = false
+			return nil
 		}
 		m.imeReporter = reporter
 	}
-	if err := m.imeReporter.episode(m.imeState()); err != nil {
-		return err
-	}
+	_ = m.imeReporter.episode(m.imeState())
 	m.imeFocused = m.imeReporter.authorized()
 	return nil
-}
-
-// IMEFailure survives both value Model copies and Program filter failures.
-func (m *Model) IMEFailure() error {
-	if m.imeReporter == nil {
-		return nil
-	}
-	return m.imeReporter.error()
 }
 
 // CloseIME waits for the lifecycle close ACK; callers invoke it before os.Exit.
@@ -402,7 +397,8 @@ func (m *Model) CloseIME() error {
 	if m.imeReporter == nil {
 		return nil
 	}
-	return m.imeReporter.close()
+	_ = m.imeReporter.close()
+	return nil
 }
 
 func (m Model) imeState() string {
@@ -413,8 +409,8 @@ func (m Model) imeState() string {
 }
 
 // IMEFilter suspends the reporter before Bubble Tea handles SuspendMsg internally;
-// this runs before Model.Update can see the suspension. Failure is shared, not
-// stored in the filter's value copy, and replaces suspension with TUI shutdown.
+// this runs before Model.Update can see the suspension. A failed release disables
+// only the optional reporter; native terminal suspension still proceeds.
 func IMEFilter(model tea.Model, msg tea.Msg) tea.Msg {
 	if _, suspended := msg.(tea.SuspendMsg); !suspended {
 		return msg
@@ -423,8 +419,6 @@ func IMEFilter(model tea.Model, msg tea.Msg) tea.Msg {
 	if !ok || m.imeReporter == nil {
 		return msg
 	}
-	if err := m.imeReporter.suspend(); err != nil {
-		return tea.QuitMsg{}
-	}
+	_ = m.imeReporter.suspend()
 	return msg
 }

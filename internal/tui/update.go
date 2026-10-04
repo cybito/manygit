@@ -17,31 +17,24 @@ import (
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.IMEFailure() != nil {
-		return m, tea.Quit
-	}
 	if key, ok := msg.(tea.KeyMsg); ok && key.Type == tea.KeyCtrlZ {
 		// Terminal handoff must release through IMEFilter even when a normal
 		// inactive ACK would deny command input.
 		return m, tea.Suspend
 	}
 	if m.imeReporter != nil {
-		var err error
 		switch msg.(type) {
 		case tea.KeyMsg:
-			err = m.imeReporter.key(m.imeState())
+			_ = m.imeReporter.key(m.imeState())
 			m.imeFocused = m.imeReporter.authorized()
 		case tea.FocusMsg:
-			err = m.imeReporter.episode(m.imeState())
+			_ = m.imeReporter.episode(m.imeState())
 			m.imeFocused = m.imeReporter.authorized()
 		case tea.BlurMsg:
 			m.imeFocused = false
-			err = m.imeReporter.blur()
+			_ = m.imeReporter.blur()
 		}
-		if err != nil {
-			return m, tea.Quit
-		}
-		if _, key := msg.(tea.KeyMsg); key && !m.imeFocused {
+		if _, key := msg.(tea.KeyMsg); key && !m.imeFocused && m.imeReporter.error() == nil {
 			// A normal inactive ACK cancels command authorization without
 			// converting background focus refusal into a transport failure.
 			return m, nil
@@ -51,15 +44,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.update(msg)
 	next := model.(Model)
 	if next.imeReporter != nil {
-		var err error
 		if next.imeFocused {
-			err = next.imeReporter.report(next.imeState())
+			_ = next.imeReporter.report(next.imeState())
 		}
 		next.imeFocused = next.imeReporter.authorized()
-		if err != nil {
-			// Do not dispatch the business Cmd after protection failed.
-			return next, tea.Quit
-		}
 	}
 	return next, cmd
 }
@@ -979,9 +967,7 @@ func (m Model) handleSingleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.setStatus(styleOrange.Render(noLocalClone(missing, "open")))
 		case path != "":
 			if m.imeReporter != nil {
-				if err := m.imeReporter.suspend(); err != nil {
-					return m, tea.Quit
-				}
+				_ = m.imeReporter.suspend()
 			}
 			return m, openRepoCmd(m.cfg.OpenCmd, path)
 		}

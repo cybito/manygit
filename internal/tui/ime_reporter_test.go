@@ -141,7 +141,7 @@ func (m imeCommandModel) Init() tea.Cmd {
 	return func() tea.Msg { return tea.KeyMsg{Type: tea.KeyEnter} }
 }
 
-func TestIMEFailedACKQuitsWithoutRunningCommand(t *testing.T) {
+func TestIMEFailedACKContinuesRunningCommand(t *testing.T) {
 	for _, failure := range []string{"rejected", "timeout"} {
 		t.Run(failure, func(t *testing.T) {
 			path := serveTestIME(t, func(_ uint64, _ imeRequest) (imeResponse, bool) {
@@ -166,19 +166,22 @@ func TestIMEFailedACKQuitsWithoutRunningCommand(t *testing.T) {
 				if _, ok := msg.(tea.BatchMsg); ok {
 					businessDispatched = true
 				}
+				if out, ok := msg.(scriptOutMsg); ok && out.done {
+					return tea.QuitMsg{}
+				}
 				return IMEFilter(model, msg)
 			}
 			final, err := tea.NewProgram(imeCommandModel{m}, tea.WithContext(ctx),
 				tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithoutRenderer(),
 				tea.WithoutSignalHandler(), tea.WithFilter(filter)).Run()
 			if err != nil {
-				t.Fatalf("protection failure did not quit cleanly: %v", err)
+				t.Fatalf("optional reporter interrupted the program: %v", err)
 			}
 			if ctx.Err() != nil {
-				t.Fatal("TUI kept running after a failed ACK")
+				t.Fatal("shell command did not complete after a failed ACK")
 			}
 			stopped := final.(Model)
-			failureErr := stopped.IMEFailure()
+			failureErr := stopped.imeReporter.error()
 			if failureErr == nil {
 				t.Fatal("final Model lost the IME failure")
 			}
@@ -191,11 +194,14 @@ func TestIMEFailedACKQuitsWithoutRunningCommand(t *testing.T) {
 					t.Fatalf("expected ACK timeout, got %v", failureErr)
 				}
 			}
-			if businessDispatched {
-				t.Fatal("failed protection dispatched the shell command to Bubble Tea")
+			if !businessDispatched {
+				t.Fatal("optional reporter swallowed the shell command")
 			}
-			if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("unprotected business command executed: stat=%v", err)
+			if contents, err := os.ReadFile(marker); err != nil || string(contents) != "ran" {
+				t.Fatalf("ordinary shell command did not execute: %q, %v", contents, err)
+			}
+			if stopped.imeReporter.authorized() || stopped.imeReporter.conn != nil || stopped.imeReporter.state != "" {
+				t.Fatal("disabled reporter retained active intent")
 			}
 		})
 	}
@@ -286,10 +292,10 @@ func TestIMESuspendRejectionSurvivesFilterModelCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.CloseIME() })
-	if _, ok := IMEFilter(m, tea.SuspendMsg{}).(tea.QuitMsg); !ok {
-		t.Fatal("rejected suspend reached Bubble Tea's internal suspension")
+	if _, ok := IMEFilter(m, tea.SuspendMsg{}).(tea.SuspendMsg); !ok {
+		t.Fatal("rejected suspend blocked native suspension")
 	}
-	if err := m.IMEFailure(); err == nil || !strings.Contains(err.Error(), "UNKNOWN") {
+	if err := m.imeReporter.error(); err == nil || !strings.Contains(err.Error(), "UNKNOWN") {
 		t.Fatalf("original Model lost filter failure: %v", err)
 	}
 }
@@ -331,7 +337,7 @@ func TestIMEInactiveWaitsForRealInputOrFocus(t *testing.T) {
 			}
 			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 			m = next.(Model)
-			if m.filtering || cmd != nil || m.IMEFailure() != nil {
+			if m.filtering || cmd != nil || m.imeReporter.error() != nil {
 				t.Fatal("inactive real input dispatched a command or latched a failure")
 			}
 			foreground.Store(true)
@@ -345,7 +351,7 @@ func TestIMEInactiveWaitsForRealInputOrFocus(t *testing.T) {
 				next, _ = m.Update(tea.FocusMsg{})
 			}
 			m = next.(Model)
-			if !m.filtering || !m.imeFocused || owner.Load() == 0 || m.IMEFailure() != nil {
+			if !m.filtering || !m.imeFocused || owner.Load() == 0 || m.imeReporter.error() != nil {
 				t.Fatal("genuine foreground episode failed to restore the current text classifier")
 			}
 			if m.imeReporter.state != "text" {
@@ -373,7 +379,7 @@ func TestIMEStateInactiveCancelsOldAuthorization(t *testing.T) {
 	t.Cleanup(func() { _ = m.CloseIME() })
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(Model)
-	if m.imeFocused || m.imeReporter.authorized() || m.IMEFailure() != nil {
+	if m.imeFocused || m.imeReporter.authorized() || m.imeReporter.error() != nil {
 		t.Fatal("state inactive did not cancel prior applied authorization normally")
 	}
 	before := requests.Load()
@@ -570,7 +576,7 @@ func TestHerdrIMEPaneAndPopupRecordOnly(t *testing.T) {
 			t.Cleanup(func() { _ = m.CloseIME() })
 			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 			m = next.(Model)
-			if !m.filtering || m.imeReporter.state != "text" || m.IMEFailure() != nil {
+			if !m.filtering || m.imeReporter.state != "text" || m.imeReporter.error() != nil {
 				t.Fatal("recorded text mode prevented enabled Herdr app input")
 			}
 			next, _ = m.Update(tea.BlurMsg{})
@@ -640,10 +646,10 @@ func TestHerdrIMEInvalidLaunchNeverFallsBack(t *testing.T) {
 				t.Setenv("HERDR_SOCKET_PATH", link)
 			}
 			m := New(config.Default(), "", nil, nil)
-			if err := m.EnableTUIIME(); err == nil {
-				t.Fatal("invalid Herdr launch silently selected a working transport")
+			if err := m.EnableTUIIME(); err != nil {
+				t.Fatalf("invalid Herdr launch leaked a consumer error: %v", err)
 			}
-			if contacted.Load() != 0 || m.imeReporter != nil {
+			if contacted.Load() != 0 || m.imeReporter == nil || m.imeReporter.error() == nil || m.imeReporter.authorized() {
 				t.Fatal("invalid Herdr launch contacted a service or retained a lease")
 			}
 		})
@@ -679,7 +685,7 @@ func TestHerdrIMEOpenACKBoundaries(t *testing.T) {
 	}
 }
 
-func TestIMEEditorSuspendFailureNeverLaunchesChild(t *testing.T) {
+func TestIMEEditorSuspendFailureStillLaunchesChild(t *testing.T) {
 	path := serveTestIME(t, func(id uint64, request imeRequest) (imeResponse, bool) {
 		if request.Op == "suspend" {
 			return imeResponse{Generation: 1, Error: "UNKNOWN"}, true
@@ -691,7 +697,9 @@ func TestIMEEditorSuspendFailureNeverLaunchesChild(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf ran > \"$0.ran\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg.OpenCmd = script
+	// Invoke the existing system interpreter rather than executing a newly
+	// created program; the fixture still runs through the real editor command.
+	cfg.OpenCmd = "/bin/sh " + script
 	m := New(cfg, "", repos, nil)
 	m.imeReporter = newIMEReporter(path)
 	if err := m.EnableTUIIME(); err != nil {
@@ -701,16 +709,27 @@ func TestIMEEditorSuspendFailureNeverLaunchesChild(t *testing.T) {
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	m = next.(Model)
 	if cmd == nil {
-		t.Fatal("failed handoff did not terminate the TUI")
+		t.Fatal("failed optional reporter swallowed editor command")
 	}
-	if _, quit := cmd().(tea.QuitMsg); !quit {
-		t.Fatal("failed handoff returned an editor command instead of shutdown")
+	done, ok := cmd().(openDoneMsg)
+	if !ok {
+		t.Fatal("failed reporter replaced the editor command")
 	}
-	if m.IMEFailure() == nil || !strings.Contains(m.IMEFailure().Error(), "UNKNOWN") {
-		t.Fatal("editor handoff lost its first protection failure")
+	if done.err != nil {
+		t.Fatalf("real editor fixture failed: %v", done.err)
 	}
-	if _, err := os.Stat(script + ".ran"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("editor launched after failed release: %v", err)
+	if m.imeReporter.error() == nil || !strings.Contains(m.imeReporter.error().Error(), "UNKNOWN") {
+		t.Fatal("editor handoff lost its first reporter failure")
+	}
+	if contents, err := os.ReadFile(script + ".ran"); err != nil || string(contents) != "ran" {
+		t.Fatalf("editor did not launch after failed optional release: %q, %v", contents, err)
+	}
+	next, _ = m.Update(done)
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m = next.(Model)
+	if !m.filtering || m.imeReporter.authorized() || m.imeReporter.conn != nil {
+		t.Fatal("child return did not preserve ordinary use with disabled reporter")
 	}
 }
 
@@ -904,7 +923,7 @@ func TestIMEKeyRevalidatesCompositorOnlyPause(t *testing.T) {
 	}
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(Model)
-	if cmd != nil || m.filtering || m.imeFocused || m.IMEFailure() != nil || owner.Load() != 0 {
+	if cmd != nil || m.filtering || m.imeFocused || m.imeReporter.error() != nil || owner.Load() != 0 {
 		t.Fatal("cached active flag authorized command input after a compositor-only pause")
 	}
 	foreground.Store(true)
@@ -936,15 +955,66 @@ func TestHerdrCoalescedInputRejectsStreamEOF(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.CloseIME() })
 	<-closed
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(Model)
-	if m.filtering || m.imeReporter.authorized() || !errors.Is(m.IMEFailure(), io.EOF) {
-		t.Fatal("coalesced Herdr intent hid a dead stream and dispatched input")
+	if !m.filtering || m.imeReporter.authorized() || !errors.Is(m.imeReporter.error(), io.EOF) {
+		t.Fatal("dead Herdr stream failed to disable enhancement and preserve input")
 	}
-	if cmd == nil {
-		t.Fatal("dead Herdr stream did not terminate the TUI")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = next.(Model)
+	if m.filter != "x" || requests.Load() != 2 || m.imeReporter.conn != nil {
+		t.Fatal("disabled reporter swallowed text or reconnected/replayed")
 	}
-	if _, quit := cmd().(tea.QuitMsg); !quit || requests.Load() != 2 {
-		t.Fatal("dead Herdr stream reconnected/replayed rather than retaining its failure")
+}
+
+func TestIMEMissingSocketDisablesUntilNextLaunch(t *testing.T) {
+	m := New(config.Default(), "", nil, nil)
+	m.imeReporter = newIMEReporter(filepath.Join(t.TempDir(), "missing.sock"))
+	if err := m.EnableTUIIME(); err != nil {
+		t.Fatal(err)
+	}
+	first := m.imeReporter.error()
+	if first == nil || m.imeFocused || m.imeReporter.authorized() {
+		t.Fatal("missing service masqueraded as applied protection")
+	}
+	for _, msg := range []tea.Msg{tea.ResumeMsg{}, tea.FocusMsg{},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("abc")}} {
+		next, _ := m.Update(msg)
+		m = next.(Model)
+	}
+	if !m.filtering || m.filter != "abc" || m.imeReporter.error() != first ||
+		m.imeReporter.conn != nil || m.imeReporter.state != "" || m.imeFocused {
+		t.Fatal("disabled reporter swallowed text, retried, or retained active intent")
+	}
+	if _, ok := IMEFilter(m, tea.SuspendMsg{}).(tea.SuspendMsg); !ok {
+		t.Fatal("disabled reporter blocked suspension")
+	}
+	if err := m.EnableTUIIME(); err != nil || m.imeReporter.error() != first {
+		t.Fatal("explicit enable retried the failed reporter")
+	}
+	if err := m.CloseIME(); err != nil {
+		t.Fatalf("disabled reporter leaked a close error: %v", err)
+	}
+}
+
+func TestIMECloseRejectionIsOptional(t *testing.T) {
+	path := serveTestIME(t, func(id uint64, request imeRequest) (imeResponse, bool) {
+		if request.Op == "close" {
+			return imeResponse{Generation: 1, Error: "UNKNOWN"}, true
+		}
+		return appliedTestIMEACK(id), true
+	})
+	m := New(config.Default(), "", nil, nil)
+	m.imeReporter = newIMEReporter(path)
+	if err := m.EnableTUIIME(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CloseIME(); err != nil {
+		t.Fatalf("optional close leaked an error: %v", err)
+	}
+	if m.imeReporter.error() == nil || m.imeReporter.authorized() || m.imeReporter.conn != nil ||
+		m.imeReporter.state != "" {
+		t.Fatal("rejected close retained or fabricated active intent")
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,12 +21,15 @@ import (
 
 type imeObservedInput struct{ reads atomic.Int32 }
 
-func (r *imeObservedInput) Read(_ []byte) (int, error) {
-	r.reads.Add(1)
+func (r *imeObservedInput) Read(p []byte) (int, error) {
+	if r.reads.Add(1) == 1 {
+		p[0] = 'q'
+		return 1, nil
+	}
 	return 0, io.EOF
 }
 
-func TestIMEInitializationFailureDoesNotStartTUI(t *testing.T) {
+func TestIMEInitializationFailureStillStartsTUI(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not enable the Unix-socket IME reporter")
 	}
@@ -85,18 +87,15 @@ func TestIMEInitializationFailureDoesNotStartTUI(t *testing.T) {
 	defer cancel()
 	err = runTUI(tui.New(config.Default(), home, nil, nil), true,
 		tea.WithInput(input), tea.WithOutput(&output), tea.WithContext(ctx), tea.WithoutSignalHandler())
-	if err == nil || !strings.Contains(err.Error(), "BACKEND_UNAVAILABLE") {
-		t.Fatalf("initial protection error was not returned: %v", err)
+	if err != nil {
+		t.Fatalf("optional IME initialization leaked an error: %v", err)
 	}
-	if input.reads.Load() != 0 {
-		t.Fatal("keyboard loop started before the initial ACK")
-	}
-	if output.Len() != 0 {
-		t.Fatal("terminal was taken over before the initial ACK")
+	if ctx.Err() != nil || input.reads.Load() == 0 || output.Len() == 0 {
+		t.Fatal("ordinary TUI input/quit did not proceed after rejected initialization")
 	}
 }
 
-func TestHerdrMarkerPrecedesSSHAndRejectsBeforeTUI(t *testing.T) {
+func TestHerdrMarkerPrecedesSSHAndDisablesWithoutBlockingTUI(t *testing.T) {
 	t.Setenv("SSH_TTY", "/dev/pts/fixture")
 	t.Setenv("HERDR_IME_INTENT", "")
 	if err := os.Unsetenv("HERDR_IME_INTENT"); err != nil {
@@ -114,13 +113,15 @@ func TestHerdrMarkerPrecedesSSHAndRejectsBeforeTUI(t *testing.T) {
 			}
 			input := &imeObservedInput{}
 			var output bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
 			err := runTUI(tui.New(config.Default(), "", nil, nil), false,
-				tea.WithInput(input), tea.WithOutput(&output), tea.WithoutSignalHandler())
-			if err == nil || !strings.Contains(err.Error(), "HERDR_IME_INTENT") {
-				t.Fatalf("invalid marker/identity did not fail visibly: %v", err)
+				tea.WithInput(input), tea.WithOutput(&output), tea.WithContext(ctx), tea.WithoutSignalHandler())
+			if err != nil {
+				t.Fatalf("invalid marker leaked a consumer error: %v", err)
 			}
-			if input.reads.Load() != 0 || output.Len() != 0 {
-				t.Fatal("invalid Herdr transport touched the interactive terminal")
+			if ctx.Err() != nil || input.reads.Load() == 0 || output.Len() == 0 {
+				t.Fatal("invalid Herdr marker blocked ordinary interactive input/quit")
 			}
 		})
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -113,14 +112,12 @@ Flags:
 	showNotice(updateNotice)
 }
 
-// runTUI owns the complete interactive lifecycle. Initial reporting must receive
-// an ACK before NewProgram/Run takes over the terminal or starts keyboard input.
+// runTUI owns the complete interactive lifecycle. IME reporting is optional:
+// its first failure disables the enhancement without interrupting the TUI.
 func runTUI(model tui.Model, enableIME bool, options ...tea.ProgramOption) error {
 	_, marked := os.LookupEnv("HERDR_IME_INTENT")
 	if marked || enableIME {
-		if err := model.EnableTUIIME(); err != nil {
-			return errors.Join(err, model.CloseIME())
-		}
+		_ = model.EnableTUIIME()
 	}
 	programOptions := []tea.ProgramOption{
 		tea.WithAltScreen(), tea.WithReportFocus(), tea.WithFilter(tui.IMEFilter),
@@ -130,9 +127,8 @@ func runTUI(model tui.Model, enableIME bool, options ...tea.ProgramOption) error
 	if final, ok := finalModel.(tui.Model); ok {
 		model = final
 	}
-	imeErr := model.IMEFailure()
-	closeErr := model.CloseIME()
-	return errors.Join(runErr, imeErr, closeErr)
+	_ = model.CloseIME()
+	return runErr
 }
 
 // showNotice prints a held-back update notice and records that it was shown.
