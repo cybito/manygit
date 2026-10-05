@@ -96,6 +96,8 @@ jobs:
           persist-credentials: false
       - name: Exercise asset identity, checksum, and no-clobber boundaries
         shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
         run: |
           python3 - <<'PY'
           import importlib.util,pathlib,tempfile

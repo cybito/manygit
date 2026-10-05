@@ -7,7 +7,7 @@
 
 ## Publishing a new custom version
 
-Only a **published GitHub Release** in `cybito/manygit` triggers `custom-release.yml`. Ordinary pushes and tag pushes do not publish. The release tag must be `v<major>.<minor>.<patch>-custom.<positive integer>` and resolve to a commit reachable from `origin/custom`. This migration's first asset-bearing release uses `v1.1.7-custom.8`; existing tags/releases are never moved. Publish against the exact pushed custom SHA, not an upstream branch.
+Only a **published GitHub Release** in `cybito/manygit` triggers `custom-release.yml`. Ordinary pushes and tag pushes do not publish. The release tag must be `v<major>.<minor>.<patch>-custom.<positive integer>` and resolve to a commit reachable from `origin/custom`. This migration's first asset-bearing release uses `v1.1.7-custom.9`; existing tags/releases are never moved. Publish against the exact pushed custom SHA, not an upstream branch.
 
 The ARM64 matrix builds on `macos-26` and `ubuntu-24.04-arm` (native Linux GNU binaries for Omarchy ARM64). Go is pinned to **1.26.8**, with `GOTOOLCHAIN=local`, `GOWORK=off`, `CGO_ENABLED=0`, readonly modules, trimpath, and VCS metadata. The version linker value is the release tag without `v`. CI checks `manygit --version`, Go toolchain/target/source metadata including `vcs.modified=false`, ARM64 executable headers, and installation into an isolated prefix twice. `MANYGIT_NO_UPDATE_CHECK=1` disables self-update during smoke checks. It never runs the upstream GoReleaser publishing path.
 
@@ -19,7 +19,7 @@ Before the first asset publication, the operator must:
 
 ## GitHub Release asset contract
 
-For each platform package file, including `release.json` and `SHA256SUMS`, the remote asset name is `<tag>-<platform>-<original-package-filename>`, for example `v1.1.7-custom.8-darwin-manygit-v1.1.7-custom.8-darwin-arm64.tar.gz`. The helper queries assets with `gh release view --json assets`; it downloads and validates any existing bytes before reuse. Mismatching assets are rejected and never overwritten. Missing files in a partially uploaded platform set are added individually. Uploads use `gh release upload` without `--clobber`; concurrent publication is serialized per tag/platform. Assets must each be smaller than 2 GiB and the complete release cannot exceed 1000 assets.
+For each platform package file, including `release.json` and `SHA256SUMS`, the remote asset name is `<tag>-<platform>-<original-package-filename>`, for example `v1.1.7-custom.9-darwin-manygit-v1.1.7-custom.9-darwin-arm64.tar.gz`. The helper queries assets with `gh release view --json assets`; it downloads and validates any existing bytes before reuse. Mismatching assets are rejected and never overwritten. Missing files in a partially uploaded platform set are added individually. Uploads use `gh release upload` without `--clobber`; concurrent publication is serialized per tag/platform. Assets must each be smaller than 2 GiB and the complete release cannot exceed 1000 assets.
 
 The helper independently reads assets back using `gh release download` and validates exact platform/tag/source commit identity, receipt schema, payload hash/size, SHA256SUMS, and complete file inventory. A final job repeats that validation for both platforms before updating the `<!-- custom-builds:start -->` / `<!-- custom-builds:end -->` release-note block, preserving all user-authored text outside it. The block links directly to the release assets. No GitHub workflow artifact or cache is used for product packages.
 
@@ -30,7 +30,7 @@ The package contains the archive, `release.json` (schema 1), and `SHA256SUMS`. T
 Download the desired platform set and restore original package filenames:
 
 ```sh
-tag=v1.1.7-custom.8
+tag=v1.1.7-custom.9
 platform=linux # use darwin for macOS ARM64
 mkdir -p /absolute/path/download
 cd /absolute/path/download
