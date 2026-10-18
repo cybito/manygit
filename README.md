@@ -235,7 +235,9 @@ stops at the first failure, so a conflict leaves you one repo to fix, not five.
 
 `HERDR_IME_INTENT=1` 与 `HERDR_ENV=1` 先于 GUI/SSH 判定选择 `pane.input_intent.stream`，要求可信 `HERDR_SOCKET_PATH` 与互斥 pane/Popup identity；非法／矛盾 marker 静默禁用本进程 reporter，不回退至 server 输入源或本地主机 daemon。server 的 `scope:recorded` 只证明意图保存，聚焦 Herdr client 独立等待本机 `scope:applied` ACK；server/client 两端 `[experimental].ime_control` 默认关闭。
 
-失焦、暂停、退出释放暂态。`Ctrl-Z` 经既有 IME filter 尝试释放后原生挂起；`fg`／异步 child 完成只恢复运行资格，不自动夺回 owner，下一个真实 key/FocusIn 才按当前 classifier 恢复。IME reporter 是可选增强：缺失组件、初始化／模式／释放 ACK 错误或运行中断线会关闭 reporter、清除活跃意图并禁用到下次启动，不重连重放、不显示错误、不吞按键、不阻断外部程序或退出；正常 `inactive` 仍是背景保护状态而非故障，`recorded` 不冒充英文保护。help、version、stats 不接触服务；无 marker 的 SSH、headless 及 Windows 保留绕过。没有额外输入法设置或 IME 专用 keybinding，源码候选不等于已部署／真实 GUI 验收。
+失焦、暂停、退出释放暂态。`Ctrl-Z` 经既有 IME filter 尝试释放后原生挂起；自身终端返回或打开命令完成后，立即采样当前 classifier，以新 `activate` 申请恢复并等待 ACK，不依赖首个按键。仅仍有自身 suspension 时发起交接；重复完成不重放，背景消息不重建 owner，`inactive` 不授权。子程序只关闭自身会话，不查询或恢复父程序模式。
+
+IME reporter 是可选增强：缺失组件、初始化／模式／释放 ACK 错误或运行中断线会关闭 reporter、清除活跃意图并禁用到下次启动，不重连重放、不显示错误、不吞按键、不阻断外部程序或退出；正常 `inactive` 仍是背景保护状态而非故障，`recorded` 不冒充英文保护。help、version、stats 不接触服务；无 marker 的 SSH、headless 及 Windows 保留绕过。没有额外输入法设置或 IME 专用 keybinding，源码候选不等于已部署／真实 GUI 验收。
 
 
 ## Releasing (maintainer)

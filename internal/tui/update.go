@@ -44,6 +44,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.update(msg)
 	next := model.(Model)
 	if next.imeReporter != nil {
+		switch msg.(type) {
+		case tea.ResumeMsg, openDoneMsg:
+			_ = next.imeReporter.returned(next.imeState())
+			next.imeFocused = next.imeReporter.authorized()
+		}
 		if next.imeFocused {
 			_ = next.imeReporter.report(next.imeState())
 		}
@@ -53,7 +58,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // update retains the business key handling and early returns. Only real input
-// and focus episodes acquire; background updates may synchronize an active mode.
+// and focus episodes or completed terminal handoffs acquire; background updates
+// may synchronize an active mode.
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:

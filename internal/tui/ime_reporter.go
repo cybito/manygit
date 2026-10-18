@@ -19,19 +19,18 @@ import (
 // an input-source snapshot. Model copies and the Program filter share its serial
 // lifecycle and first transport failure.
 type imeReporter struct {
-	mu              sync.Mutex
-	path            string
-	target          map[string]string
-	conn            net.Conn
-	reader          *bufio.Reader
-	session         string
-	generation      uint64
-	state           string
-	active          bool
-	suspended       bool
-	suspendInactive bool
-	closed          bool
-	failure         error
+	mu         sync.Mutex
+	path       string
+	target     map[string]string
+	conn       net.Conn
+	reader     *bufio.Reader
+	session    string
+	generation uint64
+	state      string
+	active     bool
+	suspended  bool
+	closed     bool
+	failure    error
 }
 
 type imeRequest struct {
@@ -234,7 +233,6 @@ func (r *imeReporter) fail(err error) error {
 	r.drop()
 	r.state = ""
 	r.suspended = false
-	r.suspendInactive = false
 	if r.failure == nil {
 		r.failure = fmt.Errorf("IME reporting failed: %w", err)
 	}
@@ -261,7 +259,7 @@ func (r *imeReporter) episodeLocked(state string, keyboard bool) error {
 	if r.failure != nil {
 		return r.failure
 	}
-	if r.closed {
+	if r.closed || r.suspended {
 		return nil
 	}
 	if r.active && r.target != nil {
@@ -274,7 +272,7 @@ func (r *imeReporter) episodeLocked(state string, keyboard bool) error {
 		return r.reportLocked(state)
 	}
 	op := "activate"
-	if (keyboard && r.target == nil && r.conn != nil) || (r.suspended && !r.suspendInactive && r.conn != nil) {
+	if keyboard && r.target == nil && r.conn != nil {
 		op = "resume"
 	}
 	request := imeRequest{Op: op, State: state}
@@ -288,7 +286,6 @@ func (r *imeReporter) episodeLocked(state string, keyboard bool) error {
 	r.state = state
 	r.active = scope == "applied" || scope == "recorded"
 	r.suspended = false
-	r.suspendInactive = false
 	return nil
 }
 
@@ -343,7 +340,6 @@ func (r *imeReporter) suspend() error {
 	if r.closed || r.suspended {
 		return nil
 	}
-	r.suspendInactive = !r.active
 	if r.conn != nil {
 		if _, err := r.exchange(imeRequest{Op: "suspend"}); err != nil {
 			return err
@@ -352,6 +348,21 @@ func (r *imeReporter) suspend() error {
 	r.suspended = true
 	r.active = false
 	return nil
+}
+
+// returned samples only this app's mode after its terminal handoff completes.
+// A fresh claim handles a child's delayed close; the transport arbitrates focus.
+func (r *imeReporter) returned(state string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failure != nil {
+		return r.failure
+	}
+	if r.closed || !r.suspended {
+		return nil
+	}
+	r.suspended = false
+	return r.episodeLocked(state, false)
 }
 
 func (r *imeReporter) error() error {

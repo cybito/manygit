@@ -210,11 +210,18 @@ func TestIMEFailedACKContinuesRunningCommand(t *testing.T) {
 func TestIMEBlurredBackgroundAndResumeKeepOtherOwner(t *testing.T) {
 	var mu sync.Mutex
 	var owner uint64
+	var parentForeground atomic.Bool
+	parentForeground.Store(true)
 	path := serveTestIME(t, func(id uint64, request imeRequest) (imeResponse, bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch request.Op {
 		case "activate", "resume":
+			if id == 1 && !parentForeground.Load() {
+				response := appliedTestIMEACK(id)
+				response.Scope = "inactive"
+				return response, true
+			}
 			owner = id
 		case "blur", "suspend", "close":
 			if owner == id {
@@ -232,6 +239,7 @@ func TestIMEBlurredBackgroundAndResumeKeepOtherOwner(t *testing.T) {
 	t.Cleanup(func() { _ = m.CloseIME() })
 	model, _ := m.Update(tea.BlurMsg{})
 	m = model.(Model)
+	parentForeground.Store(false)
 	other := newIMEReporter(path)
 	if err := other.episode("text"); err != nil {
 		t.Fatal(err)
@@ -266,6 +274,7 @@ func TestIMEBlurredBackgroundAndResumeKeepOtherOwner(t *testing.T) {
 	// A real focus must reacquire the lease even when refetch takes its cooldown
 	// early return. Before that event, resume and background work stay inactive.
 	m.lastFetch = time.Now()
+	parentForeground.Store(true)
 	model, cmd := m.Update(tea.FocusMsg{})
 	m = model.(Model)
 	if cmd != nil {
@@ -396,7 +405,7 @@ func TestIMEStateInactiveCancelsOldAuthorization(t *testing.T) {
 	}
 }
 
-func TestIMEEditorHandoffDoesNotResumeOnCompletion(t *testing.T) {
+func TestIMEEditorHandoffReclaimsBeforeLateChildClose(t *testing.T) {
 	var owner atomic.Uint64
 	path := serveTestIME(t, func(id uint64, request imeRequest) (imeResponse, bool) {
 		switch request.Op {
@@ -426,16 +435,18 @@ func TestIMEEditorHandoffDoesNotResumeOnCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = child.close() })
-	childOwner := owner.Load()
 	next, _ = m.Update(cmd())
 	m = next.(Model)
 	next, _ = m.Update(statusMsg{})
 	m = next.(Model)
-	if owner.Load() != childOwner || m.imeReporter.authorized() {
-		t.Fatal("editor completion/background work stole the child lease")
+	if owner.Load() != parentOwner || !m.imeReporter.authorized() {
+		t.Fatal("editor return did not reclaim its own command mode before input")
 	}
 	if err := child.close(); err != nil {
 		t.Fatal(err)
+	}
+	if owner.Load() != parentOwner {
+		t.Fatal("late child close released the returned parent")
 	}
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(Model)
@@ -592,6 +603,20 @@ func TestHerdrIMEPaneAndPopupRecordOnly(t *testing.T) {
 			m = next.(Model)
 			if !m.imeFocused || m.imeReporter.session != "herdr-owner" || !opened.Load() {
 				t.Fatal("Herdr focus episode lost its intent-stream identity")
+			}
+			IMEFilter(m, tea.SuspendMsg{})
+			before = requests.Load()
+			m.filtering = false
+			next, _ = m.Update(tea.ResumeMsg{})
+			m = next.(Model)
+			if requests.Load() != before+1 || !m.imeFocused || m.imeReporter.state != "command" || m.imeReporter.session != "herdr-owner" {
+				t.Fatal("Herdr terminal return did not declare its current mode on the retained stream")
+			}
+			before = requests.Load()
+			next, _ = m.Update(tea.ResumeMsg{})
+			m = next.(Model)
+			if requests.Load() != before {
+				t.Fatal("duplicate completion replayed a foreground declaration")
 			}
 		})
 	}
@@ -834,7 +859,39 @@ func TestHerdrIMELifecycleMustMatchRecordedOpenIdentity(t *testing.T) {
 	}
 }
 
-func TestIMEJobControlResumeWaitsForTrueInput(t *testing.T) {
+func TestIMEHandoffReturnDeclaresCurrentModeBeforeInput(t *testing.T) {
+	for _, completion := range []tea.Msg{tea.ResumeMsg{}, openDoneMsg{}} {
+		for _, editing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%T/text=%v", completion, editing), func(t *testing.T) {
+				var declaration atomic.Value
+				path := serveTestIME(t, func(id uint64, request imeRequest) (imeResponse, bool) {
+					declaration.Store(request)
+					return appliedTestIMEACK(id), true
+				})
+				m := New(config.Default(), "", nil, nil)
+				m.imeReporter = newIMEReporter(path)
+				_ = m.EnableTUIIME()
+				t.Cleanup(func() { _ = m.CloseIME() })
+				if err := m.imeReporter.suspend(); err != nil {
+					t.Fatal(err)
+				}
+				m.filtering = editing
+				next, _ := m.Update(completion)
+				m = next.(Model)
+				state := "command"
+				if editing {
+					state = "text"
+				}
+				got := declaration.Load().(imeRequest)
+				if !m.imeFocused || got.Op != "activate" || got.State != state {
+					t.Fatalf("terminal returned without current mode before input: focused=%v request=%+v", m.imeFocused, got)
+				}
+			})
+		}
+	}
+}
+
+func TestIMEJobControlReturnReclaimsBeforeInput(t *testing.T) {
 	var owner atomic.Uint64
 	path := serveTestIME(t, func(id uint64, request imeRequest) (imeResponse, bool) {
 		switch request.Op {
@@ -868,14 +925,16 @@ func TestIMEJobControlResumeWaitsForTrueInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = other.close() })
-	otherOwner := owner.Load()
 	next, _ = m.Update(tea.ResumeMsg{})
 	m = next.(Model)
-	if owner.Load() != otherOwner || m.imeReporter.authorized() {
-		t.Fatal("job-control callback reacquired without a genuine input/focus episode")
+	if owner.Load() != parentOwner || !m.imeReporter.authorized() {
+		t.Fatal("terminal return did not declare its current command mode before input")
 	}
 	if err := other.close(); err != nil {
 		t.Fatal(err)
+	}
+	if owner.Load() != parentOwner {
+		t.Fatal("late child close released the returned parent")
 	}
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(Model)
