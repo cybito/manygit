@@ -28,6 +28,7 @@ type imeReporter struct {
 	generation uint64
 	state      string
 	active     bool
+	focusLost  bool // explicit blur, independent of lease authorization
 	suspended  bool
 	closed     bool
 	failure    error
@@ -244,6 +245,7 @@ func (r *imeReporter) fail(err error) error {
 func (r *imeReporter) episode(state string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.focusLost = false
 	return r.episodeLocked(state, false)
 }
 
@@ -259,7 +261,7 @@ func (r *imeReporter) episodeLocked(state string, keyboard bool) error {
 	if r.failure != nil {
 		return r.failure
 	}
-	if r.closed || r.suspended {
+	if r.closed || r.suspended || r.focusLost {
 		return nil
 	}
 	if r.active && r.target != nil {
@@ -320,6 +322,7 @@ func (r *imeReporter) authorized() bool {
 func (r *imeReporter) blur() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.focusLost = true
 	if r.failure != nil {
 		return r.failure
 	}

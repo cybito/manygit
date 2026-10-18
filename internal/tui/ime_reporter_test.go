@@ -262,6 +262,9 @@ func TestIMEBlurredBackgroundAndResumeKeepOtherOwner(t *testing.T) {
 	model, _ = m.Update(fetchDoneMsg{})
 	m = model.(Model)
 	assertOtherOwner()
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = model.(Model)
+	assertOtherOwner()
 	if _, ok := IMEFilter(m, tea.SuspendMsg{}).(tea.SuspendMsg); !ok {
 		t.Fatal("inactive suspend unexpectedly failed")
 	}
@@ -284,6 +287,47 @@ func TestIMEBlurredBackgroundAndResumeKeepOtherOwner(t *testing.T) {
 	defer mu.Unlock()
 	if owner == 0 || owner == otherOwner {
 		t.Fatal("real focus failed to reacquire foreground ownership")
+	}
+}
+
+func TestIMEExplicitBlurBlocksInputAndReturnWithoutDaemonFocusChecks(t *testing.T) {
+	var calls atomic.Int64
+	path := serveTestIME(t, func(id uint64, request imeRequest) (imeResponse, bool) {
+		calls.Add(1)
+		return appliedTestIMEACK(id), true
+	})
+	r := newIMEReporter(path)
+	t.Cleanup(func() { _ = r.close() })
+	if err := r.episode("command"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.blur(); err != nil {
+		t.Fatal(err)
+	}
+	before := calls.Load()
+	for _, state := range []string{"command", "text"} {
+		if err := r.key(state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != before || r.authorized() {
+		t.Fatal("input reacquired an explicitly blurred lease")
+	}
+	if err := r.suspend(); err != nil {
+		t.Fatal(err)
+	}
+	before = calls.Load()
+	if err := r.returned("command"); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != before || r.authorized() {
+		t.Fatal("child return overrode explicit blur")
+	}
+	if err := r.episode("command"); err != nil {
+		t.Fatal(err)
+	}
+	if !r.authorized() {
+		t.Fatal("real focus failed to restore authorization")
 	}
 }
 
