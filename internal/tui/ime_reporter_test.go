@@ -31,7 +31,7 @@ type imeResponse struct {
 }
 
 // These fixtures exercise real framing and connection ownership; the direct
-// wrapper and Herdr open/operation handlers share the same Unix stream.
+// wrapper and hc label handlers share the same Unix stream.
 func serveTestIME(t *testing.T, handle func(uint64, imeRequest) (imeResponse, bool)) string {
 	t.Helper()
 	return serveTestIMEFrames(t, func(id uint64, line []byte) ([]byte, bool) {
@@ -578,131 +578,136 @@ func TestIMEACKFrameBoundary(t *testing.T) {
 	}
 }
 
-func TestHerdrIMEPaneAndPopupRecordOnly(t *testing.T) {
-	for _, target := range []string{"pane", "popup"} {
-		t.Run(target, func(t *testing.T) {
-			var requests atomic.Int32
-			var opened atomic.Bool
-			path := serveTestIMEFrames(t, func(_ uint64, line []byte) ([]byte, bool) {
-				var request struct {
-					ID     string            `json:"id"`
-					Method string            `json:"method"`
-					Params map[string]string `json:"params"`
-					Op     string            `json:"op"`
-					State  string            `json:"state"`
-					Policy string            `json:"policy"`
-				}
-				if err := json.Unmarshal(line, &request); err != nil {
-					t.Errorf("decode Herdr frame: %v", err)
-					return nil, false
-				}
-				requests.Add(1)
-				if request.Method != "" {
-					key := "pane_id"
-					if target == "popup" {
-						key = "popup_terminal_id"
-					}
-					if request.ID != "ime:open" || request.Method != "pane.input_intent.stream" ||
-						len(request.Params) != 1 || request.Params[key] != "target" || opened.Swap(true) {
-						t.Errorf("incorrect or repeated Herdr stream open: %+v", request)
-					}
-					return []byte(`{"id":"ime:open","result":{"type":"pane_input_intent_stream_opened","session":"herdr-owner","generation":3}}`), true
-				}
-				if !opened.Load() {
-					t.Error("lifecycle request before Herdr stream open")
-				}
-				return []byte(`{"ok":true,"generation":3,"session":"herdr-owner","scope":"recorded"}`), true
-			})
-			t.Setenv("HERDR_IME_INTENT", "1")
-			t.Setenv("HERDR_ENV", "1")
-			t.Setenv("HERDR_SOCKET_PATH", path)
-			t.Setenv("HERDR_PANE_ID", "")
-			t.Setenv("HERDR_IME_POPUP_TERMINAL_ID", "")
-			t.Setenv("SSH_TTY", "/dev/pts/herdr-fixture")
-			if target == "pane" {
-				t.Setenv("HERDR_PANE_ID", "target")
-			} else {
-				t.Setenv("HERDR_IME_POPUP_TERMINAL_ID", "target")
-			}
-			m := New(config.Default(), "", nil, nil)
-			if err := m.EnableTUIIME(); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = m.CloseIME() })
-			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
-			m = next.(Model)
-			if !m.filtering || m.imeReporter.state != "text" || m.imeReporter.error() != nil {
-				t.Fatal("recorded text mode prevented enabled Herdr app input")
-			}
-			next, _ = m.Update(tea.BlurMsg{})
-			m = next.(Model)
-			before := requests.Load()
-			next, _ = m.Update(fetchDoneMsg{})
-			m = next.(Model)
-			if requests.Load() != before {
-				t.Fatal("background Herdr update reactivated a blurred session")
-			}
-			m.lastFetch = time.Now()
-			next, _ = m.Update(tea.FocusMsg{})
-			m = next.(Model)
-			if !m.imeFocused || m.imeReporter.session != "herdr-owner" || !opened.Load() {
-				t.Fatal("Herdr focus episode lost its intent-stream identity")
-			}
-			IMEFilter(m, tea.SuspendMsg{})
-			before = requests.Load()
-			m.filtering = false
-			next, _ = m.Update(tea.ResumeMsg{})
-			m = next.(Model)
-			if requests.Load() != before+1 || !m.imeFocused || m.imeReporter.state != "command" || m.imeReporter.session != "herdr-owner" {
-				t.Fatal("Herdr terminal return did not declare its current mode on the retained stream")
-			}
-			before = requests.Load()
-			next, _ = m.Update(tea.ResumeMsg{})
-			m = next.(Model)
-			if requests.Load() != before {
-				t.Fatal("duplicate completion replayed a foreground declaration")
-			}
-		})
+type hcLabelRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      uint64 `json:"id"`
+	Method  string `json:"method"`
+	Params  struct {
+		Terminal string            `json:"terminal"`
+		Labels   map[string]string `json:"labels"`
+	} `json:"params"`
+}
+
+// hcReply confirms the requested label exactly as herdr-core does.
+func hcReply(t *testing.T, line []byte) (hcLabelRequest, []byte) {
+	t.Helper()
+	var request hcLabelRequest
+	if err := json.Unmarshal(line, &request); err != nil {
+		t.Errorf("decode hc frame: %v", err)
+	}
+	labels := map[string]string{"other": "kept"}
+	if value := request.Params.Labels["imekit.intent"]; value != "" {
+		labels["imekit.intent"] = value
+	}
+	frame, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID,
+		"result": map[string]any{"terminal": request.Params.Terminal, "labels": labels}})
+	if err != nil {
+		t.Errorf("encode hc reply: %v", err)
+	}
+	return request, frame
+}
+
+func setHCEnv(t *testing.T, terminal, socket string) {
+	t.Setenv("HC_TERMINAL_ID", terminal)
+	t.Setenv("HC_TERMINAL_SOCKET", socket)
+}
+
+func TestHCLabelLifecycle(t *testing.T) {
+	var mu sync.Mutex
+	var values []string
+	path := serveTestIMEFrames(t, func(_ uint64, line []byte) ([]byte, bool) {
+		request, frame := hcReply(t, line)
+		if request.JSONRPC != "2.0" || request.Method != "terminal.label" || request.Params.Terminal != "t7" ||
+			len(request.Params.Labels) != 1 {
+			t.Errorf("incorrect hc request: %s", line)
+		}
+		mu.Lock()
+		values = append(values, request.Params.Labels["imekit.intent"])
+		mu.Unlock()
+		return frame, true
+	})
+	_ = os.Chmod(path, 0o755) // herdr-core leaves its socket 0755 in a 0700 directory
+	setHCEnv(t, "t7", path)
+	t.Setenv("SSH_TTY", "/dev/pts/hc-fixture")
+	pgid, err := imeProcessGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	label := func(state string) string { return fmt.Sprintf("1:%d:%s", pgid, state) }
+	m := New(config.Default(), "", nil, nil)
+	if err := m.EnableTUIIME(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.imeFocused || m.imeReporter.session != "hc:t7" || m.imeReporter.generation != 1 {
+		t.Fatal("hc activate did not return a recorded synthetic ACK")
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m = next.(Model)
+	if !m.filtering || m.imeReporter.state != "text" || m.imeReporter.error() != nil {
+		t.Fatal("recorded text mode prevented input")
+	}
+	next, _ = m.Update(tea.BlurMsg{})
+	m = next.(Model)
+	r := m.imeReporter
+	r.mu.Lock()
+	scope, err := r.exchange(imeRequest{Op: "state", State: "command"})
+	r.mu.Unlock()
+	if err != nil || scope != "recorded" || r.generation != 4 {
+		t.Fatalf("unheld state was not accepted: %q %v", scope, err)
+	}
+	m.lastFetch = time.Now()
+	next, _ = m.Update(tea.FocusMsg{})
+	m = next.(Model)
+	IMEFilter(m, tea.SuspendMsg{})
+	m.filtering = false
+	next, _ = m.Update(tea.ResumeMsg{})
+	m = next.(Model)
+	if !m.imeFocused || m.imeReporter.state != "command" {
+		t.Fatal("hc return did not declare its current mode")
+	}
+	_ = m.CloseIME()
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{label("command"), label("text"), label("idle"), label("text"), label("idle"), label("command"), ""}
+	if strings.Join(values, ",") != strings.Join(want, ",") {
+		t.Fatalf("hc labels = %q, want %q", values, want)
 	}
 }
 
-func TestHerdrIMEInvalidLaunchNeverFallsBack(t *testing.T) {
-	for _, defect := range []string{"empty-marker", "unsupported", "marker", "env", "no-target", "two-targets",
-		"no-socket", "relative", "unclean", "public-socket", "public-parent", "symlink"} {
+func TestHCEnterWritesCommand(t *testing.T) {
+	var value atomic.Value
+	path := serveTestIMEFrames(t, func(_ uint64, line []byte) ([]byte, bool) {
+		request, frame := hcReply(t, line)
+		value.Store(request.Params.Labels["imekit.intent"])
+		return frame, true
+	})
+	r := &imeReporter{path: path, terminal: "t1"}
+	if scope, err := r.exchange(imeRequest{Op: "enter"}); err != nil || scope != "recorded" || !r.held ||
+		!strings.HasSuffix(value.Load().(string), ":command") {
+		t.Fatalf("enter did not hold command: %v", err)
+	}
+	_ = r.close()
+}
+
+func TestHCInvalidLaunchNeverFallsBack(t *testing.T) {
+	for _, defect := range []string{"only-id", "only-socket", "relative", "unclean", "public-parent", "symlink", "missing"} {
 		t.Run(defect, func(t *testing.T) {
 			var contacted atomic.Int32
 			path := serveTestIME(t, func(id uint64, _ imeRequest) (imeResponse, bool) {
 				contacted.Add(1)
 				return appliedTestIMEACK(id), true
 			})
-			t.Setenv("HERDR_IME_INTENT", "1")
-			t.Setenv("HERDR_ENV", "1")
-			t.Setenv("HERDR_SOCKET_PATH", path)
-			t.Setenv("HERDR_PANE_ID", "pane")
-			t.Setenv("HERDR_IME_POPUP_TERMINAL_ID", "")
+			t.Setenv("SSH_TTY", "")
+			setHCEnv(t, "t1", path)
 			switch defect {
-			case "empty-marker":
-				t.Setenv("HERDR_IME_INTENT", "")
-			case "unsupported":
-				t.Setenv("HERDR_IME_INTENT", "unsupported")
-			case "marker":
-				t.Setenv("HERDR_IME_INTENT", "yes")
-			case "env":
-				t.Setenv("HERDR_ENV", "")
-			case "no-target":
-				t.Setenv("HERDR_PANE_ID", "")
-			case "two-targets":
-				t.Setenv("HERDR_IME_POPUP_TERMINAL_ID", "popup")
-			case "no-socket":
-				t.Setenv("HERDR_SOCKET_PATH", "")
+			case "only-id":
+				t.Setenv("HC_TERMINAL_SOCKET", "")
+			case "only-socket":
+				t.Setenv("HC_TERMINAL_ID", "")
 			case "relative":
-				t.Setenv("HERDR_SOCKET_PATH", "control.sock")
+				t.Setenv("HC_TERMINAL_SOCKET", "control.sock")
 			case "unclean":
-				t.Setenv("HERDR_SOCKET_PATH", filepath.Dir(path)+"/../"+filepath.Base(filepath.Dir(path))+"/control.sock")
-			case "public-socket":
-				if err := os.Chmod(path, 0o666); err != nil {
-					t.Fatal(err)
-				}
+				t.Setenv("HC_TERMINAL_SOCKET", filepath.Dir(path)+"/../"+filepath.Base(filepath.Dir(path))+"/control.sock")
 			case "public-parent":
 				if err := os.Chmod(filepath.Dir(path), 0o755); err != nil {
 					t.Fatal(err)
@@ -712,193 +717,54 @@ func TestHerdrIMEInvalidLaunchNeverFallsBack(t *testing.T) {
 				if err := os.Symlink(path, link); err != nil {
 					t.Fatal(err)
 				}
-				t.Setenv("HERDR_SOCKET_PATH", link)
+				t.Setenv("HC_TERMINAL_SOCKET", link)
+			case "missing":
+				t.Setenv("HC_TERMINAL_SOCKET", filepath.Join(filepath.Dir(path), "missing.sock"))
 			}
 			m := New(config.Default(), "", nil, nil)
 			if err := m.EnableTUIIME(); err != nil {
-				t.Fatalf("invalid Herdr launch leaked a consumer error: %v", err)
+				t.Fatalf("invalid hc launch leaked a consumer error: %v", err)
 			}
-			if contacted.Load() != 0 || m.imeReporter == nil || m.imeReporter.error() == nil || m.imeReporter.authorized() {
-				t.Fatal("invalid Herdr launch contacted a service or retained a lease")
+			if contacted.Load() != 0 || m.imeReporter.error() == nil || m.imeReporter.authorized() {
+				t.Fatal("invalid hc launch contacted a service or retained a lease")
 			}
 		})
 	}
 }
 
-func TestHerdrIMEOpenACKBoundaries(t *testing.T) {
-	for _, frame := range []string{
-		`{"id":"other","result":{"type":"pane_input_intent_stream_opened","session":"s","generation":1}}`,
-		`{"id":"ime:open","result":{"type":"ok","session":"s","generation":1}}`,
-		`{"id":"ime:open","result":{"type":"pane_input_intent_stream_opened","session":"","generation":1}}`,
-		`{"id":"ime:open","result":{"type":"pane_input_intent_stream_opened","session":"s","generation":0}}`,
-		`{"id":"ime:open","error":{"code":"TARGET_NOT_FOUND","message":"gone"}}`,
-		`{"id":"ime:open","result":{"type":"pane_input_intent_stream_opened","session":"s","generation":1}} {}`,
-		strings.Repeat(" ", 4097),
+func TestHCReplyValidationDisables(t *testing.T) {
+	for name, reply := range map[string]func(hcLabelRequest) string{
+		"error": func(r hcLabelRequest) string {
+			return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"error":{"code":-32602,"message":"x"}}`, r.ID)
+		},
+		"id": func(r hcLabelRequest) string {
+			return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"labels":{}}}`, r.ID+1)
+		},
+		"no-labels": func(r hcLabelRequest) string { return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{}}`, r.ID) },
+		"value": func(r hcLabelRequest) string {
+			return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"labels":{"imekit.intent":"1:1:idle"}}}`, r.ID)
+		},
+		"oversize": func(hcLabelRequest) string { return strings.Repeat(" ", 4097) },
+		"timeout":  func(hcLabelRequest) string { return "" },
 	} {
-		t.Run(fmt.Sprintf("frame-%d", len(frame)), func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			var requests atomic.Int32
-			path := serveTestIMEFrames(t, func(_ uint64, _ []byte) ([]byte, bool) {
+			path := serveTestIMEFrames(t, func(_ uint64, line []byte) ([]byte, bool) {
 				requests.Add(1)
-				return []byte(frame), true
+				var request hcLabelRequest
+				_ = json.Unmarshal(line, &request)
+				frame := reply(request)
+				return []byte(frame), frame != ""
 			})
-			reporter := &imeReporter{path: path, target: map[string]string{"pane_id": "target"}}
-			first := reporter.episode("command")
-			if first == nil || reporter.authorized() {
-				t.Fatal("invalid stream open allowed a lifecycle activation")
+			r := &imeReporter{path: path, terminal: "t1"}
+			first := r.episode("command")
+			if first == nil || r.authorized() {
+				t.Fatal("invalid hc reply authorized intent")
 			}
-			if again := reporter.episode("text"); again != first || requests.Load() != 1 {
-				t.Fatal("invalid stream open reconnected or replayed a mode")
+			if again := r.episode("text"); again != first || requests.Load() != 1 {
+				t.Fatal("hc failure reconnected or replayed")
 			}
-			_ = reporter.close()
-		})
-	}
-}
-
-func TestIMEEditorSuspendFailureStillLaunchesChild(t *testing.T) {
-	path := serveTestIME(t, func(id uint64, request imeRequest) (imeResponse, bool) {
-		if request.Op == "suspend" {
-			return imeResponse{Generation: 1, Error: "UNKNOWN"}, true
-		}
-		return appliedTestIMEACK(id), true
-	})
-	cfg, repos := twoRepos(t)
-	script := filepath.Join(t.TempDir(), "editor")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf ran > \"$0.ran\"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// Invoke the existing system interpreter rather than executing a newly
-	// created program; the fixture still runs through the real editor command.
-	cfg.OpenCmd = "/bin/sh " + script
-	m := New(cfg, "", repos, nil)
-	m.imeReporter = newIMEReporter(path)
-	if err := m.EnableTUIIME(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = m.CloseIME() })
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
-	m = next.(Model)
-	if cmd == nil {
-		t.Fatal("failed optional reporter swallowed editor command")
-	}
-	done, ok := cmd().(openDoneMsg)
-	if !ok {
-		t.Fatal("failed reporter replaced the editor command")
-	}
-	if done.err != nil {
-		t.Fatalf("real editor fixture failed: %v", done.err)
-	}
-	if m.imeReporter.error() == nil || !strings.Contains(m.imeReporter.error().Error(), "UNKNOWN") {
-		t.Fatal("editor handoff lost its first reporter failure")
-	}
-	if contents, err := os.ReadFile(script + ".ran"); err != nil || string(contents) != "ran" {
-		t.Fatalf("editor did not launch after failed optional release: %q, %v", contents, err)
-	}
-	next, _ = m.Update(done)
-	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
-	m = next.(Model)
-	if !m.filtering || m.imeReporter.authorized() || m.imeReporter.conn != nil {
-		t.Fatal("child return did not preserve ordinary use with disabled reporter")
-	}
-}
-
-func TestIMEACKMalformedEnvelopeNeverAuthorizes(t *testing.T) {
-	for i, frame := range []string{
-		`{"generation":1,"error":"UNKNOWN"}`,
-		`{"ok":null,"generation":1,"error":"UNKNOWN"}`,
-		`{"ok":true,"session":"s","scope":"applied"}`,
-		`{"ok":true,"generation":1.5,"session":"s","scope":"applied"}`,
-		`{"ok":true,"generation":-1,"session":"s","scope":"applied"}`,
-		`{"ok":true,"generation":1,"session":"s","scope":"applied","extra":true}`,
-		`{"ok":true,"generation":1,"session":"s","scope":"applied"} {}`,
-		`{"ok":false,"generation":1,"error":"UNKNOWN","session":"s"}`,
-	} {
-		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			path := serveTestIMEFrames(t, func(_ uint64, _ []byte) ([]byte, bool) {
-				return []byte(frame), true
-			})
-			reporter := newIMEReporter(path)
-			if err := reporter.episode("command"); err == nil || reporter.authorized() {
-				t.Fatal("malformed ACK authorized command dispatch")
-			}
-			_ = reporter.close()
-		})
-	}
-}
-
-func TestIMETransportEOFDoesNotReconnectOrReplay(t *testing.T) {
-	var requests atomic.Int32
-	path := serveTestIMEFrames(t, func(_ uint64, _ []byte) ([]byte, bool) {
-		if requests.Add(1) == 1 {
-			return []byte(`{"ok":true,"generation":1,"session":"s","scope":"applied"}`), true
-		}
-		return nil, true
-	})
-	reporter := newIMEReporter(path)
-	if err := reporter.episode("command"); err != nil {
-		t.Fatal(err)
-	}
-	first := reporter.report("text")
-	if !errors.Is(first, io.EOF) || reporter.authorized() {
-		t.Fatalf("EOF did not invalidate authorization: %v", first)
-	}
-	if again := reporter.episode("command"); again != first || requests.Load() != 2 {
-		t.Fatal("EOF reconnected or replayed a previous classifier")
-	}
-	_ = reporter.close()
-}
-
-func TestHerdrIMEOpenTimeoutNeverSendsMode(t *testing.T) {
-	var requests atomic.Int32
-	path := serveTestIMEFrames(t, func(_ uint64, _ []byte) ([]byte, bool) {
-		requests.Add(1)
-		return nil, false
-	})
-	reporter := &imeReporter{path: path, target: map[string]string{"pane_id": "target"}}
-	first := reporter.episode("command")
-	var timeout net.Error
-	if !errors.As(first, &timeout) || !timeout.Timeout() || reporter.authorized() {
-		t.Fatalf("open did not fail with a bounded transport timeout: %v", first)
-	}
-	if again := reporter.episode("text"); again != first || requests.Load() != 1 {
-		t.Fatal("open timeout sent a mode/reconnected instead of retaining its failure")
-	}
-	_ = reporter.close()
-}
-
-func TestHerdrIMELifecycleMustMatchRecordedOpenIdentity(t *testing.T) {
-	for _, defect := range []string{"scope", "session", "generation"} {
-		t.Run(defect, func(t *testing.T) {
-			var requests atomic.Int32
-			path := serveTestIMEFrames(t, func(_ uint64, _ []byte) ([]byte, bool) {
-				if requests.Add(1) == 1 {
-					return []byte(`{"id":"ime:open","result":{"type":"pane_input_intent_stream_opened","session":"s","generation":3}}`), true
-				}
-				response := imeResponse{OK: true, Generation: 3, Session: "s", Scope: "recorded"}
-				switch defect {
-				case "scope":
-					response.Scope = "applied"
-				case "session":
-					response.Session = "other"
-				case "generation":
-					response.Generation = 2
-				}
-				frame, err := json.Marshal(response)
-				if err != nil {
-					t.Errorf("encode Herdr lifecycle ACK: %v", err)
-					return nil, true
-				}
-				return frame, true
-			})
-			reporter := &imeReporter{path: path, target: map[string]string{"pane_id": "target"}}
-			first := reporter.episode("command")
-			if first == nil || reporter.authorized() {
-				t.Fatal("Herdr accepted a source ACK or mismatched its recorded stream identity")
-			}
-			if again := reporter.episode("text"); again != first || requests.Load() != 2 {
-				t.Fatal("invalid lifecycle ACK re-opened/replayed its mode")
-			}
-			_ = reporter.close()
+			_ = r.close()
 		})
 	}
 }
@@ -1037,22 +903,21 @@ func TestIMEKeyRevalidatesCompositorOnlyPause(t *testing.T) {
 	}
 }
 
-func TestHerdrCoalescedInputRejectsStreamEOF(t *testing.T) {
+func TestHCCoalescedInputRejectsStreamEOF(t *testing.T) {
 	var requests atomic.Int32
 	closed := make(chan struct{})
-	path := serveTestIMEFrames(t, func(_ uint64, _ []byte) ([]byte, bool) {
-		if requests.Add(1) == 1 {
-			return []byte(`{"id":"ime:open","result":{"type":"pane_input_intent_stream_opened","session":"s","generation":3}}`), true
-		}
-		return []byte(`{"ok":true,"generation":3,"session":"s","scope":"recorded"}`), true
+	path := serveTestIMEFrames(t, func(_ uint64, line []byte) ([]byte, bool) {
+		requests.Add(1)
+		_, frame := hcReply(t, line)
+		return frame, true
 	}, func(conn net.Conn) {
-		if requests.Load() == 2 {
+		if requests.Load() == 1 {
 			_ = conn.Close()
 			close(closed)
 		}
 	})
 	m := New(config.Default(), "", nil, nil)
-	m.imeReporter = &imeReporter{path: path, target: map[string]string{"pane_id": "pane"}}
+	m.imeReporter = &imeReporter{path: path, terminal: "t1"}
 	if err := m.EnableTUIIME(); err != nil {
 		t.Fatal(err)
 	}
@@ -1061,11 +926,11 @@ func TestHerdrCoalescedInputRejectsStreamEOF(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(Model)
 	if !m.filtering || m.imeReporter.authorized() || !errors.Is(m.imeReporter.error(), io.EOF) {
-		t.Fatal("dead Herdr stream failed to disable enhancement and preserve input")
+		t.Fatal("dead hc connection failed to disable enhancement and preserve input")
 	}
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	m = next.(Model)
-	if m.filter != "x" || requests.Load() != 2 || m.imeReporter.conn != nil {
+	if m.filter != "x" || requests.Load() != 1 || m.imeReporter.conn != nil {
 		t.Fatal("disabled reporter swallowed text or reconnected/replayed")
 	}
 }

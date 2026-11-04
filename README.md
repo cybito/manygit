@@ -233,7 +233,7 @@ stops at the first failure, so a conflict leaves you one repo to fix, not five.
 
 本地图形终端直接向 `ime-control` 报告真实 TUI 模式。命令态取得暂态英文，`filtering`（`/`）、shell prompt（`!`）、AI prompt（`:`）及编辑 settings editor command 属于文本态，释放暂态英文而不强制中文；`!` 执行 Enter 后 prompt 仍开放、仍 text。可观测手选更新最新来源；同值来源重选无法可靠识别。
 
-`HERDR_IME_INTENT=1` 与 `HERDR_ENV=1` 先于 GUI/SSH 判定选择 `pane.input_intent.stream`，要求可信 `HERDR_SOCKET_PATH` 与互斥 pane/Popup identity；非法／矛盾 marker 静默禁用本进程 reporter，不回退至 server 输入源或本地主机 daemon。server 的 `scope:recorded` 只证明意图保存，聚焦 Herdr client 独立等待本机 `scope:applied` ACK；server/client 两端 `[experimental].ime_control` 默认关闭。
+在 herdr-core 终端内（`HC_TERMINAL_ID` 与 `HC_TERMINAL_SOCKET` 均非空）先于 GUI/SSH 判定选择 hc transport：经 `terminal.label` 写 `imekit.intent` 标签，规则见 ImeKit `docs/protocol.md`「reporter：hc transport」（[git.cybit.top/cybit/imekit](https://git.cybit.top/cybit/imekit/src/branch/main/docs/protocol.md)）。只设其一、socket 不可信或回复非法均静默禁用本进程 reporter，不回退至本地 daemon；`recorded` 只表示 core 已保存标签。
 
 失焦、暂停、退出释放暂态。`Ctrl-Z` 经既有 IME filter 尝试释放后原生挂起；自身终端返回或打开命令完成后，立即采样当前 classifier，以新 `activate` 申请恢复并等待 ACK，不依赖首个按键。仅仍有自身 suspension 时发起交接；重复完成不重放，背景消息不重建 owner，`inactive` 不授权。子程序只关闭自身会话，不查询或恢复父程序模式。
 

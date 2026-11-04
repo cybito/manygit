@@ -33,10 +33,8 @@ func TestIMEInitializationFailureStillStartsTUI(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not enable the Unix-socket IME reporter")
 	}
-	t.Setenv("HERDR_IME_INTENT", "")
-	if err := os.Unsetenv("HERDR_IME_INTENT"); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("HC_TERMINAL_ID", "")
+	t.Setenv("HC_TERMINAL_SOCKET", "")
 	// HOME includes the full socket suffix: use a short root for Darwin's
 	// Unix socket pathname limit rather than its long default temporary path.
 	root, err := filepath.EvalSymlinks("/tmp")
@@ -95,21 +93,19 @@ func TestIMEInitializationFailureStillStartsTUI(t *testing.T) {
 	}
 }
 
-func TestHerdrMarkerPrecedesSSHAndDisablesWithoutBlockingTUI(t *testing.T) {
+func TestHCTerminalPrecedesSSHAndDisablesWithoutBlockingTUI(t *testing.T) {
 	t.Setenv("SSH_TTY", "/dev/pts/fixture")
-	t.Setenv("HERDR_IME_INTENT", "")
-	if err := os.Unsetenv("HERDR_IME_INTENT"); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("HC_TERMINAL_ID", "")
+	t.Setenv("HC_TERMINAL_SOCKET", "")
 	if imeTerminal() {
 		t.Fatal("ordinary SSH session selected a local daemon lease")
 	}
-	for _, marker := range []string{"", "unsupported", "invalid", "1"} {
-		t.Run(marker, func(t *testing.T) {
-			t.Setenv("HERDR_IME_INTENT", marker)
-			t.Setenv("HERDR_ENV", "")
+	for _, env := range [][2]string{{"t1", ""}, {"", "/nonexistent/hc.sock"}, {"t1", "/nonexistent/hc.sock"}} {
+		t.Run(env[0]+env[1], func(t *testing.T) {
+			t.Setenv("HC_TERMINAL_ID", env[0])
+			t.Setenv("HC_TERMINAL_SOCKET", env[1])
 			if !imeTerminal() {
-				t.Fatal("marked SSH session silently took the ordinary bypass")
+				t.Fatal("hc SSH session silently took the ordinary bypass")
 			}
 			input := &imeObservedInput{}
 			var output bytes.Buffer
@@ -118,10 +114,10 @@ func TestHerdrMarkerPrecedesSSHAndDisablesWithoutBlockingTUI(t *testing.T) {
 			err := runTUI(tui.New(config.Default(), "", nil, nil), false,
 				tea.WithInput(input), tea.WithOutput(&output), tea.WithContext(ctx), tea.WithoutSignalHandler())
 			if err != nil {
-				t.Fatalf("invalid marker leaked a consumer error: %v", err)
+				t.Fatalf("invalid hc launch leaked a consumer error: %v", err)
 			}
 			if ctx.Err() != nil || input.reads.Load() == 0 || output.Len() == 0 {
-				t.Fatal("invalid Herdr marker blocked ordinary interactive input/quit")
+				t.Fatal("invalid hc launch blocked ordinary interactive input/quit")
 			}
 		})
 	}

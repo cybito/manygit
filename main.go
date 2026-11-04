@@ -115,8 +115,7 @@ Flags:
 // runTUI owns the complete interactive lifecycle. IME reporting is optional:
 // its first failure disables the enhancement without interrupting the TUI.
 func runTUI(model tui.Model, enableIME bool, options ...tea.ProgramOption) error {
-	_, marked := os.LookupEnv("HERDR_IME_INTENT")
-	if marked || enableIME {
+	if hcTerminal() || enableIME {
 		_ = model.EnableTUIIME()
 	}
 	programOptions := []tea.ProgramOption{
@@ -129,6 +128,12 @@ func runTUI(model tui.Model, enableIME bool, options ...tea.ProgramOption) error
 	}
 	_ = model.CloseIME()
 	return runErr
+}
+
+// hcTerminal reports any hc terminal variable; a partial pair still selects
+// the hc transport so the reporter disables instead of falling back.
+func hcTerminal() bool {
+	return os.Getenv("HC_TERMINAL_ID") != "" || os.Getenv("HC_TERMINAL_SOCKET") != ""
 }
 
 // showNotice prints a held-back update notice and records that it was shown.

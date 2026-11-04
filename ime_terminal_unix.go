@@ -9,10 +9,10 @@ import (
 	"syscall"
 )
 
-// Herdr transport takes precedence over the ordinary local GUI gate, including
-// SSH panes. Marker validation belongs to the reporter and never falls back.
+// The hc transport takes precedence over the ordinary local GUI gate, including
+// SSH panes. hc validation belongs to the reporter and never falls back.
 func imeTerminal() bool {
-	if _, marked := os.LookupEnv("HERDR_IME_INTENT"); marked {
+	if hcTerminal() {
 		return true
 	}
 	for _, key := range []string{"SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"} {

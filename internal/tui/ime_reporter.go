@@ -15,13 +15,15 @@ import (
 	"time"
 )
 
-// imeReporter owns either a local daemon lease or a Herdr intent stream, never
+// imeReporter owns either a local daemon lease or an hc terminal label, never
 // an input-source snapshot. Model copies and the Program filter share its serial
 // lifecycle and first transport failure.
 type imeReporter struct {
 	mu         sync.Mutex
 	path       string
-	target     map[string]string
+	terminal   string // HC_TERMINAL_ID; non-empty selects the hc transport
+	held       bool   // hc transport: the label currently claims focus intent
+	rpcID      uint64
 	conn       net.Conn
 	reader     *bufio.Reader
 	session    string
@@ -34,6 +36,8 @@ type imeReporter struct {
 	failure    error
 }
 
+type imeSocketIdentity struct{ dev, ino uint64 }
+
 type imeRequest struct {
 	Op     string `json:"op"`
 	State  string `json:"state,omitempty"`
@@ -42,24 +46,18 @@ type imeRequest struct {
 
 func newIMEReporter(path string) *imeReporter { return &imeReporter{path: path} }
 
+// configuredIMEReporter selects the hc transport when either hc variable is
+// present; a partial launch is an error so callers disable without fallback.
 func configuredIMEReporter() (*imeReporter, error) {
-	if marker, present := os.LookupEnv("HERDR_IME_INTENT"); present {
-		if marker != "1" {
-			return nil, fmt.Errorf("HERDR_IME_INTENT_UNSUPPORTED: marker %q", marker)
+	terminal, socket := os.Getenv("HC_TERMINAL_ID"), os.Getenv("HC_TERMINAL_SOCKET")
+	if terminal != "" || socket != "" {
+		if terminal == "" || socket == "" {
+			return nil, errors.New("HC_TERMINAL_INVALID: require HC_TERMINAL_ID and HC_TERMINAL_SOCKET")
 		}
-		pane, popup := os.Getenv("HERDR_PANE_ID"), os.Getenv("HERDR_IME_POPUP_TERMINAL_ID")
-		if os.Getenv("HERDR_ENV") != "1" || (pane == "") == (popup == "") {
-			return nil, errors.New("HERDR_IME_INTENT_INVALID: require HERDR_ENV=1 and exactly one terminal identity")
+		if _, err := validateHCSocket(socket); err != nil {
+			return nil, fmt.Errorf("HC_TERMINAL_INVALID: %w", err)
 		}
-		path := os.Getenv("HERDR_SOCKET_PATH")
-		if err := validateIMESocket(path); err != nil {
-			return nil, fmt.Errorf("HERDR_IME_INTENT_INVALID: %w", err)
-		}
-		target := map[string]string{"pane_id": pane}
-		if popup != "" {
-			target = map[string]string{"popup_terminal_id": popup}
-		}
-		return &imeReporter{path: path, target: target}, nil
+		return &imeReporter{path: socket, terminal: terminal}, nil
 	}
 	path, err := localIMESocket()
 	if err != nil {
@@ -85,20 +83,12 @@ func (r *imeReporter) exchange(request imeRequest) (scope string, err error) {
 		}
 	}()
 	if r.conn == nil {
-		if err := validateIMESocket(r.path); err != nil {
+		if err := r.connect(); err != nil {
 			return "", err
 		}
-		conn, err := net.DialTimeout("unix", r.path, time.Second)
-		if err != nil {
-			return "", fmt.Errorf("connect: %w", err)
-		}
-		r.conn = conn
-		r.reader = bufio.NewReaderSize(conn, 4096)
-		if r.target != nil {
-			if err := r.openIntentStream(); err != nil {
-				return "", err
-			}
-		}
+	}
+	if r.terminal != "" {
+		return r.labelExchange(request)
 	}
 	if err := r.conn.SetDeadline(time.Now().Add(4 * time.Second)); err != nil {
 		return "", err
@@ -132,11 +122,7 @@ func (r *imeReporter) exchange(request imeRequest) (scope string, err error) {
 		return "", errors.New("IME service returned incomplete or changed-session ACK")
 	}
 	scope = *response.Scope
-	if r.target != nil {
-		if scope != "recorded" {
-			return "", errors.New("Herdr ACK must have scope recorded")
-		}
-	} else if scope != "applied" && scope != "inactive" && !(scope == "pending" && request.Op == "blur") {
+	if scope != "applied" && scope != "inactive" && !(scope == "pending" && request.Op == "blur") {
 		return "", errors.New("invalid direct IME ACK scope")
 	}
 	r.session, r.generation = *response.Session, *response.Generation
@@ -181,43 +167,118 @@ func (r *imeReporter) rpc(request any) ([]byte, error) {
 	return line, nil
 }
 
-func (r *imeReporter) openIntentStream() error {
+func (r *imeReporter) connect() error {
+	var identity imeSocketIdentity
+	var err error
+	if r.terminal != "" {
+		identity, err = validateHCSocket(r.path)
+	} else {
+		err = validateIMESocket(r.path)
+	}
+	if err != nil {
+		return err
+	}
+	conn, err := net.DialTimeout("unix", r.path, time.Second)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	if r.terminal != "" {
+		// The path may be swapped between validation and connect.
+		if after, err := validateHCSocket(r.path); err != nil || after != identity {
+			_ = conn.Close()
+			return errors.New("hc socket identity changed during connect")
+		}
+	}
+	r.conn = conn
+	r.reader = bufio.NewReaderSize(conn, 4096)
+	return nil
+}
+
+// labelExchange maps a lifecycle request onto the imekit.intent terminal label
+// and returns the synthetic recorded ACK scope; see imekit docs/protocol.md.
+func (r *imeReporter) labelExchange(request imeRequest) (string, error) {
+	write, value := true, ""
+	switch request.Op {
+	case "enter":
+		value, r.held = "command", true
+	case "activate", "resume":
+		value, r.held = request.State, true
+	case "state":
+		value, write = request.State, r.held
+	case "blur", "suspend":
+		value, r.held = "idle", false
+	case "close":
+		r.held = false
+	default:
+		return "", fmt.Errorf("unsupported hc lifecycle %q", request.Op)
+	}
+	if value != "" && value != "command" && value != "text" && value != "idle" {
+		return "", fmt.Errorf("invalid hc intent state %q", value)
+	}
+	if write {
+		if value != "" {
+			pgid, err := imeProcessGroup()
+			if err != nil {
+				return "", err
+			}
+			value = fmt.Sprintf("1:%d:%s", pgid, value)
+		}
+		if err := r.writeLabel(value); err != nil {
+			return "", err
+		}
+	}
+	r.generation++
+	r.session = "hc:" + r.terminal
+	return "recorded", nil
+}
+
+func (r *imeReporter) writeLabel(value string) error {
 	if err := r.conn.SetDeadline(time.Now().Add(4 * time.Second)); err != nil {
 		return err
 	}
+	r.rpcID++
+	type params struct {
+		Terminal string            `json:"terminal"`
+		Labels   map[string]string `json:"labels"`
+	}
 	request := struct {
-		ID     string            `json:"id"`
-		Method string            `json:"method"`
-		Params map[string]string `json:"params"`
-	}{"ime:open", "pane.input_intent.stream", r.target}
+		JSONRPC string `json:"jsonrpc"`
+		ID      uint64 `json:"id"`
+		Method  string `json:"method"`
+		Params  params `json:"params"`
+	}{"2.0", r.rpcID, "terminal.label", params{r.terminal, map[string]string{"imekit.intent": value}}}
 	line, err := r.rpc(request)
 	if err != nil {
-		return fmt.Errorf("open Herdr intent stream: %w", err)
+		return fmt.Errorf("hc terminal.label: %w", err)
 	}
 	var response struct {
-		ID     string `json:"id"`
-		Result *struct {
-			Type       string  `json:"type"`
-			Session    string  `json:"session"`
-			Generation *uint64 `json:"generation"`
-		} `json:"result"`
-		Error *struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
+		ID     *uint64         `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
 	}
-	if err := decodeIMEFrame(line, &response); err != nil {
-		return fmt.Errorf("invalid Herdr stream open ACK: %w", err)
+	if err := json.Unmarshal(line, &response); err != nil {
+		return fmt.Errorf("invalid hc reply: %w", err)
 	}
-	if response.ID == "ime:open" && response.Result == nil && response.Error != nil && response.Error.Code != "" {
-		return fmt.Errorf("Herdr stream open rejected: %s: %s", response.Error.Code, response.Error.Message)
+	if len(response.Error) != 0 {
+		return fmt.Errorf("hc terminal.label rejected: %s", response.Error)
 	}
-	if response.ID != "ime:open" || response.Result == nil ||
-		response.Result.Type != "pane_input_intent_stream_opened" || response.Result.Session == "" ||
-		response.Result.Generation == nil || *response.Result.Generation == 0 || response.Error != nil {
-		return errors.New("Herdr rejected or returned an incomplete intent stream open ACK")
+	if response.ID == nil || *response.ID != r.rpcID {
+		return errors.New("hc reply id mismatch")
 	}
-	r.session, r.generation = response.Result.Session, *response.Result.Generation
+	var result struct {
+		Labels map[string]json.RawMessage `json:"labels"`
+	}
+	if err := json.Unmarshal(response.Result, &result); err != nil || result.Labels == nil {
+		return errors.New("hc reply lacks result labels")
+	}
+	raw, present := result.Labels["imekit.intent"]
+	var got string
+	if present && json.Unmarshal(raw, &got) != nil {
+		return errors.New("hc reply label is not a string")
+	}
+	if value == "" && present || value != "" && got != value {
+		return errors.New("hc reply does not confirm the written label")
+	}
 	return nil
 }
 
@@ -264,9 +325,9 @@ func (r *imeReporter) episodeLocked(state string, keyboard bool) error {
 	if r.closed || r.suspended || r.focusLost {
 		return nil
 	}
-	if r.active && r.target != nil {
+	if r.active && r.terminal != "" {
 		if r.reader.Buffered() != 0 {
-			return r.fail(errors.New("unsolicited Herdr intent stream data"))
+			return r.fail(errors.New("unsolicited hc reply data"))
 		}
 		if err := probeIMESocket(r.conn); err != nil {
 			return r.fail(err)
@@ -274,7 +335,7 @@ func (r *imeReporter) episodeLocked(state string, keyboard bool) error {
 		return r.reportLocked(state)
 	}
 	op := "activate"
-	if keyboard && r.target == nil && r.conn != nil {
+	if keyboard && r.terminal == "" && r.conn != nil {
 		op = "resume"
 	}
 	request := imeRequest{Op: op, State: state}
@@ -389,8 +450,8 @@ func (r *imeReporter) close() error {
 	return err
 }
 
-// EnableTUIIME selects Herdr transport before ordinary local GUI exclusions.
-// Herdr records intent only; no enabled pane contacts the server host's daemon.
+// EnableTUIIME selects the hc transport before ordinary local GUI exclusions.
+// hc records intent only; an hc terminal never contacts the direct daemon.
 func (m *Model) EnableTUIIME() error {
 	if m.imeReporter == nil {
 		reporter, err := configuredIMEReporter()
